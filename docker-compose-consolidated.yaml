@@ -19,7 +19,6 @@
 #   docker compose -f docker-compose-consolidated.yaml up -d
 # ============================================================
 
-version: "3.8"
 
 services:
 
@@ -46,15 +45,15 @@ services:
       dockerfile: Dockerfile.consolidated-cp
     volumes:
       # NF configs
-      - ./config/nrfcfg.yaml:/free5gc/config/nrfcfg.yaml
-      - ./config/amfcfg.yaml:/free5gc/config/amfcfg.yaml
-      - ./config/ausfcfg.yaml:/free5gc/config/ausfcfg.yaml
-      - ./config/udmcfg.yaml:/free5gc/config/udmcfg.yaml
-      - ./config/udrcfg.yaml:/free5gc/config/udrcfg.yaml
-      - ./config/smfcfg.yaml:/free5gc/config/smfcfg.yaml
-      - ./config/nssfcfg.yaml:/free5gc/config/nssfcfg.yaml
-      - ./config/pcfcfg.yaml:/free5gc/config/pcfcfg.yaml
-      - ./config/uerouting.yaml:/free5gc/config/uerouting.yaml
+      - ./config-consolidated/nrfcfg.yaml:/free5gc/config/nrfcfg.yaml
+      - ./config-consolidated/amfcfg.yaml:/free5gc/config/amfcfg.yaml
+      - ./config-consolidated/ausfcfg.yaml:/free5gc/config/ausfcfg.yaml
+      - ./config-consolidated/udmcfg.yaml:/free5gc/config/udmcfg.yaml
+      - ./config-consolidated/udrcfg.yaml:/free5gc/config/udrcfg.yaml
+      - ./config-consolidated/smfcfg.yaml:/free5gc/config/smfcfg.yaml
+      - ./config-consolidated/nssfcfg.yaml:/free5gc/config/nssfcfg.yaml
+      - ./config-consolidated/pcfcfg.yaml:/free5gc/config/pcfcfg.yaml
+      - ./config-consolidated/uerouting.yaml:/free5gc/config/uerouting.yaml
       - ./cert:/free5gc/cert
     environment:
       DB_URI: mongodb://db/free5gc
