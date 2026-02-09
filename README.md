@@ -57,6 +57,12 @@ Internet Access:  Ping 8.8.8.8 via uesimtun0 - 0% loss, ~4ms RTT
 | [5G SA Fundamentals](docs/01-5G-SA-FUNDAMENTALS.md) | What is 5G SA? Every component explained with diagrams | Beginners |
 | [Setup Guide](docs/02-SETUP-GUIDE.md) | Step-by-step installation with explanations | DevOps / Lab setup |
 | [Testing Guide](docs/03-TESTING-GUIDE.md) | 9 tests to verify your network, with log interpretation | Testing / Validation |
+| [Mandatory Components](docs/04-MANDATORY-COMPONENTS.md) | Deep dive into each mandatory NF | Intermediate |
+| [Recommended Components](docs/05-RECOMMENDED-COMPONENTS.md) | NSSF, PCF, WebUI details | Intermediate |
+| [All Components](docs/06-ALL-COMPONENTS.md) | Complete NF documentation | Reference |
+| [Consolidated Deployment](docs/07-CONSOLIDATED-DEPLOYMENT.md) | 4-container deployment architecture | DevOps / Edge |
+| [Deployment Modes Guide](docs/08-DEPLOYMENT-MODES-GUIDE.md) | Full vs Mandatory vs Consolidated: comparison, deploy, and test | All levels |
+| [5G Procedures & NF Roles](docs/09-5G-PROCEDURES-AND-NF-ROLES.md) | Real-world 5G procedures: Attach, Auth, PDU Session, Paging, and more | Intermediate / Advanced |
 
 ---
 
