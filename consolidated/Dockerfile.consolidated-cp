@@ -1,0 +1,51 @@
+# ============================================================
+# Consolidated Control Plane Container
+# Runs NRF + AMF + AUSF + UDM + UDR + SMF + NSSF + PCF
+# in a single container (8 NFs → 1 container)
+# ============================================================
+# This Dockerfile copies binaries from individual free5GC images
+# into a single image, then uses a startup script to run them all.
+#
+# Build: docker build -f Dockerfile.consolidated-cp -t free5gc-cp:v4.2.0 .
+# ============================================================
+
+# Stage 1: Copy binaries from each official image
+FROM free5gc/nrf:v4.2.0  AS nrf-bin
+FROM free5gc/amf:v4.2.0  AS amf-bin
+FROM free5gc/ausf:v4.2.0 AS ausf-bin
+FROM free5gc/udm:v4.2.0  AS udm-bin
+FROM free5gc/udr:v4.2.0  AS udr-bin
+FROM free5gc/smf:v4.2.0  AS smf-bin
+FROM free5gc/nssf:v4.2.0 AS nssf-bin
+FROM free5gc/pcf:v4.2.0  AS pcf-bin
+
+# Stage 2: Build consolidated image
+FROM ubuntu:22.04
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    wget ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /free5gc
+
+# Copy all NF binaries
+COPY --from=nrf-bin  /free5gc/nrf  ./nrf
+COPY --from=amf-bin  /free5gc/amf  ./amf
+COPY --from=ausf-bin /free5gc/ausf ./ausf
+COPY --from=udm-bin  /free5gc/udm  ./udm
+COPY --from=udr-bin  /free5gc/udr  ./udr
+COPY --from=smf-bin  /free5gc/smf  ./smf
+COPY --from=nssf-bin /free5gc/nssf ./nssf
+COPY --from=pcf-bin  /free5gc/pcf  ./pcf
+
+# Copy startup script
+COPY start-cp-nfs.sh ./start-cp-nfs.sh
+RUN chmod +x ./start-cp-nfs.sh
+
+# Create log directory
+RUN mkdir -p /var/log/free5gc
+
+# Expose SBI port (shared by all NFs via different paths)
+EXPOSE 8000
+
+ENTRYPOINT ["./start-cp-nfs.sh"]

@@ -1,0 +1,124 @@
+# ============================================================
+# free5GC Consolidated Deployment - 3 Containers Only
+# ============================================================
+# Instead of 16 separate containers, this runs the entire 5G SA
+# core in just 3 containers:
+#
+#   1. mongodb        - Database (cannot merge - different technology)
+#   2. free5gc-cp     - ALL control plane NFs in one container
+#                       (NRF + AMF + AUSF + UDM + UDR + SMF + NSSF + PCF)
+#   3. free5gc-upf    - User Plane (cannot merge - needs NET_ADMIN + GTP5G)
+#
+# Plus UERANSIM for testing (optional).
+#
+# Build first:
+#   cd consolidated
+#   docker build -f Dockerfile.consolidated-cp -t free5gc-cp:v4.2.0 .
+#
+# Then run:
+#   docker compose -f docker-compose-consolidated.yaml up -d
+# ============================================================
+
+version: "3.8"
+
+services:
+
+  # ── Container 1: MongoDB (Database) ────────────────────────
+  db:
+    container_name: mongodb
+    image: mongo:4.4
+    command: mongod --port 27017
+    expose:
+      - "27017"
+    volumes:
+      - dbdata:/data/db
+    networks:
+      privnet:
+        aliases:
+          - db
+
+  # ── Container 2: ALL Control Plane NFs (8 NFs in 1) ───────
+  free5gc-cp:
+    container_name: free5gc-cp
+    image: free5gc-cp:v4.2.0
+    build:
+      context: ./consolidated
+      dockerfile: Dockerfile.consolidated-cp
+    volumes:
+      # NF configs
+      - ./config/nrfcfg.yaml:/free5gc/config/nrfcfg.yaml
+      - ./config/amfcfg.yaml:/free5gc/config/amfcfg.yaml
+      - ./config/ausfcfg.yaml:/free5gc/config/ausfcfg.yaml
+      - ./config/udmcfg.yaml:/free5gc/config/udmcfg.yaml
+      - ./config/udrcfg.yaml:/free5gc/config/udrcfg.yaml
+      - ./config/smfcfg.yaml:/free5gc/config/smfcfg.yaml
+      - ./config/nssfcfg.yaml:/free5gc/config/nssfcfg.yaml
+      - ./config/pcfcfg.yaml:/free5gc/config/pcfcfg.yaml
+      - ./config/uerouting.yaml:/free5gc/config/uerouting.yaml
+      - ./cert:/free5gc/cert
+    environment:
+      DB_URI: mongodb://db/free5gc
+      GIN_MODE: release
+    networks:
+      privnet:
+        ipv4_address: 10.100.200.16
+        aliases:
+          - nrf.free5gc.org
+          - amf.free5gc.org
+          - ausf.free5gc.org
+          - udm.free5gc.org
+          - udr.free5gc.org
+          - smf.free5gc.org
+          - nssf.free5gc.org
+          - pcf.free5gc.org
+    depends_on:
+      - db
+
+  # ── Container 3: UPF (User Plane - needs kernel module) ───
+  free5gc-upf:
+    container_name: upf
+    image: free5gc/upf:v4.2.0
+    command: bash -c "./upf-iptables.sh && ./upf -c ./config/upfcfg.yaml"
+    volumes:
+      - ./config/upfcfg.yaml:/free5gc/config/upfcfg.yaml
+      - ./config/upf-iptables.sh:/free5gc/upf-iptables.sh
+    cap_add:
+      - NET_ADMIN
+    networks:
+      privnet:
+        aliases:
+          - upf.free5gc.org
+    depends_on:
+      - free5gc-cp
+
+  # ── UERANSIM: gNB + UE Simulator (for testing) ────────────
+  ueransim:
+    container_name: ueransim
+    image: free5gc/ueransim:latest
+    command: ./nr-gnb -c ./config/gnbcfg.yaml
+    volumes:
+      - ./config/gnbcfg.yaml:/ueransim/config/gnbcfg.yaml
+      - ./config/uecfg.yaml:/ueransim/config/uecfg.yaml
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - "/dev/net/tun"
+    networks:
+      privnet:
+        aliases:
+          - gnb.free5gc.org
+    depends_on:
+      - free5gc-cp
+      - free5gc-upf
+
+networks:
+  privnet:
+    ipam:
+      driver: default
+      config:
+        - subnet: 10.100.200.0/24
+    driver_opts:
+      com.docker.network.bridge.name: br-free5gc
+
+volumes:
+  dbdata:
