@@ -1,173 +1,158 @@
-# free5GC compose
+# 5G SA Core Network Setup with free5GC & UERANSIM
 
-This repository is a docker compose version of [free5GC](https://github.com/free5gc/free5gc) for stage 3. It's inspired by [free5gc-docker-compose](https://github.com/calee0219/free5gc-docker-compose) and also reference to [docker-free5gc](https://github.com/abousselmi/docker-free5gc).
+A complete, beginner-friendly setup of a **5G Standalone (SA) core network** using [free5GC](https://github.com/free5gc/free5gc) v4.2.0 with [UERANSIM](https://github.com/aligungr/UERANSIM) v3.2.7 for RAN/UE simulation, all running via Docker Compose.
 
-You can setup your own config in [config](./config) folder and [docker-compose.yaml](docker-compose.yaml)
+> **New to 5G?** Start with the [5G SA Fundamentals Guide](docs/01-5G-SA-FUNDAMENTALS.md) - it explains every component with real-world analogies.
 
-## Prerequisites
+## What's Inside
 
-- [GTP5G kernel module](https://github.com/free5gc/gtp5g): needed to run the UPF (Currently, UPF only supports GTP5G versions 0.9.5 (use git clone --branch v0.9.5 --depth 1 https://github.com/free5gc/gtp5g.git).)
-- [Docker Engine](https://docs.docker.com/engine/install): needed to run the Free5GC containers
-- [Docker Compose v2](https://docs.docker.com/compose/install): needed to bootstrap the free5GC stack
-
-**Note: AVX for MongoDB**: some HW does not support MongoDB releases above`4.4` due to use of the new AVX instructions set. To verify if your CPU is compatible you can check CPU flags by running `grep avx /proc/cpuinfo`. A workaround is suggested [here](https://github.com/free5gc/free5gc-compose/issues/30#issuecomment-897627049).
-
-## Start free5gc
-
-Because we need to create tunnel interface, we need to use privileged container with root permission.
-
-### Pull docker images from Docker Hub
-
-```bash
-docker compose pull
+```
+Your Phone (UE)          5G Base Station (gNB)        5G Core Network
+┌───────────┐           ┌───────────────┐          ┌──────────────────────┐
+│ UERANSIM  │──(radio)──│  UERANSIM     │──(N2)──> │ AMF  AUSF  UDM  UDR │
+│ UE        │           │  gNB          │──(N3)──> │ SMF  PCF   NRF  NSSF│
+└───────────┘           └───────────────┘          │ UPF  CHF   NEF  ... │
+                                                   └──────────┬───────────┘
+                                                              │ (N6)
+                                                         ┌────┴────┐
+                                                         │ Internet │
+                                                         └─────────┘
 ```
 
-### [Optional] Build docker images from local sources
+**16 containers** running a complete 5G SA network with 2 network slices, subscriber management, and internet connectivity.
+
+## Quick Start
+
+### Option 1: Automated (One Command)
 
 ```bash
-# Clone the project
-git clone https://github.com/free5gc/free5gc-compose.git
-cd free5gc-compose
-
-# clone free5gc sources
-cd base
-git clone --recursive -j `nproc` https://github.com/free5gc/free5gc.git
-cd ..
-
-# Build the images
-make all
-docker compose -f docker-compose-build.yaml build
-
-# Alternatively you can build specific NF image e.g.:
-make amf
-docker compose -f docker-compose-build.yaml build free5gc-amf
+ssh root@your-server
+git clone https://github.com/Manikanta-Reddy-Pasala/free5gc-5G-SA-setup.git
+cd free5gc-5G-SA-setup
+chmod +x setup-free5gc.sh
+./setup-free5gc.sh install
 ```
 
-Note:
+This handles everything: Docker, GTP5G kernel module, services, subscriber provisioning, and testing.
 
-Dangling images may be created during the build process. It is advised to remove them from time to time to free up disk space.
+### Option 2: Manual Setup
+
+Follow the step-by-step guide: [docs/02-SETUP-GUIDE.md](docs/02-SETUP-GUIDE.md)
+
+## Test Results
+
+After setup, you get a fully working 5G network:
+
+```
+UE Registration:  RM-REGISTERED (authenticated via 5G-AKA)
+PDU Session 1:    10.60.0.1 (Slice SST=1, SD=010203) - 200/100 Mbps
+PDU Session 2:    10.61.0.1 (Slice SST=1, SD=112233) - 200/100 Mbps
+Internet Access:  Ping 8.8.8.8 via uesimtun0 - 0% loss, ~4ms RTT
+```
+
+## Documentation
+
+| Document | Description | Audience |
+|----------|-------------|----------|
+| [5G SA Fundamentals](docs/01-5G-SA-FUNDAMENTALS.md) | What is 5G SA? Every component explained with diagrams | Beginners |
+| [Setup Guide](docs/02-SETUP-GUIDE.md) | Step-by-step installation with explanations | DevOps / Lab setup |
+| [Testing Guide](docs/03-TESTING-GUIDE.md) | 9 tests to verify your network, with log interpretation | Testing / Validation |
+
+## Architecture
+
+### Network Functions (What Each Container Does)
+
+| Container | Network Function | Role | Real-world Analogy |
+|-----------|-----------------|------|-------------------|
+| `amf` | Access & Mobility Management | Front door of the core. Handles registration, auth, mobility | Hotel reception desk |
+| `smf` | Session Management | Sets up data sessions, allocates IPs, controls UPF | Network engineer setting up your connection |
+| `upf` | User Plane Function | Routes all user data (the data highway) | Highway interchange |
+| `nrf` | NF Repository | Service registry - NFs discover each other here | Phone directory for network functions |
+| `ausf` | Authentication Server | Verifies subscriber identity (5G-AKA) | Security guard checking IDs |
+| `udm` | Unified Data Management | Manages subscriber data, computes auth crypto | HR department |
+| `udr` | Unified Data Repository | Database backend (MongoDB) | Filing cabinet |
+| `nssf` | Network Slice Selection | Picks the right network slice for each subscriber | Traffic controller |
+| `pcf` | Policy Control | Decides QoS rules, speed limits | Rules engine / Manager |
+| `chf` | Charging Function | Billing and usage tracking | Billing department |
+| `nef` | Network Exposure | API gateway for external apps | Public API |
+| `n3iwf` | Non-3GPP Interworking | Connects Wi-Fi devices to 5G core | Side entrance (Wi-Fi) |
+| `tngf` | Trusted Non-3GPP Gateway | Trusted non-3GPP access | Trusted side entrance |
+| `webui` | Web Console | Admin UI for subscriber management | Admin dashboard |
+| `mongodb` | Database | Stores all subscriber and config data | Database |
+| `ueransim` | gNB + UE Simulator | Simulates base station and phone | Test equipment |
+
+### Key Interfaces
+
+```
+UE ──(Uu)──> gNB ──(N2/SCTP)──> AMF ──(SBI/HTTP2)──> Other NFs
+                   ──(N3/GTP-U)──> UPF ──(N6)──> Internet
+                                    ^
+                              SMF ──(N4/PFCP)
+```
+
+### Network Configuration
+
+| Network | Subnet | Purpose |
+|---------|--------|---------|
+| Docker bridge | 10.100.200.0/24 | Internal NF communication |
+| UE Pool 1 | 10.60.0.0/16 | PDU sessions (Slice 1) |
+| UE Pool 2 | 10.61.0.0/16 | PDU sessions (Slice 2) |
+
+## Management
 
 ```bash
-docker rmi $(docker images -f "dangling=true" -q)
+./setup-free5gc.sh status    # Check all services and UE status
+./setup-free5gc.sh test      # Re-run registration and connectivity tests
+./setup-free5gc.sh logs amf  # View AMF logs (replace 'amf' with any service)
+./setup-free5gc.sh stop      # Stop all services
+./setup-free5gc.sh start     # Start all services
+./setup-free5gc.sh clean     # Stop and remove all data
 ```
 
-### Run free5GC
+### WebUI
 
-You can create free5GC containers based on local images or docker hub images:
+- **URL**: `http://<server-ip>:5000`
+- **Username**: `admin`
+- **Password**: `free5gc`
 
-```bash
-# use local images
-docker compose -f docker-compose-build.yaml up
-# use images from docker hub
-docker compose up # add -d to run in background mode
-```
+## Important Notes
 
-Destroy the established container resource after testing:
+### SQN Fix for UERANSIM
 
-```bash
-# Remove established containers (local images)
-docker compose -f docker-compose-build.yaml rm
-# Remove established containers (remote images)
-docker compose rm
-```
+UERANSIM starts with internal sequence number (SQN) = 0. The default subscriber SQN in free5GC (`16f3b3f70fc2`) is too large, causing "SQN out of range" authentication failures. The setup script automatically fixes this by setting SQN to `000000000020`.
+
+### Prerequisites
+
+- Ubuntu 22.04 LTS (Kernel 5.4+)
+- CPU with AVX support (for MongoDB 4.4+)
+- 4 GB RAM minimum, 8 GB recommended
+- Root access
+
+## Subscriber Configuration
+
+These values must match between `config/uecfg.yaml` and the subscriber database:
+
+| Parameter | Value |
+|-----------|-------|
+| IMSI | 208930000000001 |
+| MCC/MNC | 208/93 |
+| K (Permanent Key) | 8baf473f2f8fd09487cccbd7097c6862 |
+| OPC (Operator Code) | 8e27b6af0e692e750f32667a3b14605d |
+| AMF | 8000 |
+| Auth Method | 5G_AKA |
 
 ## Troubleshooting
 
-Please refer to the [Troubleshooting](./TROUBLESHOOTING.md) for more troubleshooting information.
+See [TROUBLESHOOTING.md](TROUBLESHOOTING.md) and [docs/02-SETUP-GUIDE.md#troubleshooting](docs/02-SETUP-GUIDE.md#troubleshooting) for common issues and fixes.
 
-## Integration with (external) gNB/UE
+## References
 
-### UERANSIM Notes
+- [free5GC Project](https://github.com/free5gc/free5gc) - Open source 5G core network
+- [free5GC Documentation](https://free5gc.org/guide/) - Official guides
+- [UERANSIM](https://github.com/aligungr/UERANSIM) - Open source 5G UE and RAN simulator
+- [GTP5G](https://github.com/free5gc/gtp5g) - Linux kernel module for GTP-U
+- [3GPP TS 23.501](https://www.3gpp.org/DynaReport/23501.htm) - 5G System Architecture specification
 
-The integration with the [UERANSIM](https://github.com/aligungr/UERANSIM) eNB/UE simulator is documented [here](https://free5gc.org/guide/5-install-ueransim/).
+## License
 
-This [issue](https://github.com/free5gc/free5gc-compose/issues/28) provides detailed steps that might be useful.
-
-#### Option 1: Run UE inside gNB container
-
-You can launch a UE using:
-
-```console
-docker exec -it ueransim bash
-root@host:/ueransim# ./nr-ue -c config/uecfg.yaml
-```
-
-#### Option 2: Run UE on a separate container
-
-By default, the provided UERANSIM service on this `docker-compose.yaml` will only act as a gNB. If you want to create a UE you'll need to:
-
-1. Create a subscriber through the WebUI. Follow the steps [here](https://free5gc.org/guide/Webconsole/Create-Subscriber-via-webconsole/#4-open-webconsole)
-1. Copy the `UE ID` field
-1. Change the value of `supi` in `config/uecfg.yaml` to the UE ID that you just copied
-1. Change the `linkIp` in `config/gnbcfg.yaml` to `gnb.free5gc.org` (which is also present in the `gnbSearchList` in `config/uecfg.yaml`) to enable communication between the UE and gNB services
-1. Add an UE service on `docker-compose.yaml` as it follows:
-
-```yaml
-ue:
-  container_name: ue
-  image: free5gc/ueransim:latest
-  command: ./nr-ue -c ./config/uecfg.yaml
-  volumes:
-    - ./config/uecfg.yaml:/ueransim/config/uecfg.yaml
-  cap_add:
-    - NET_ADMIN
-  devices:
-    - "/dev/net/tun"
-  networks:
-    privnet:
-      aliases:
-        - ue.free5gc.org
-  depends_on:
-    - ueransim
-```
-
-5. Run `docker-compose.yaml`
-
-### srsRAN Notes
-
-You can check this [issue](https://github.com/free5gc/free5gc-compose/issues/94) for some sample configuration files of srsRAN + free5GC
-
-## Integration of WebUI with Nginx reverse proxy
-
-Here you can find helpful guidelines on the integration of Nginx reverse proxy to set it in front of the WebUI: https://github.com/free5gc/free5gc-compose/issues/55#issuecomment-1146648600
-
-## ULCL Configuration
-
-To start the core with a I-UPF and PSA-UPF ULCL configuration, use
-
-```bash
-docker compose -f docker-compose-ulcl.yaml up
-```
-
-> Note: This configuration have been tested using release [free5gc-compose v4.0.0](https://github.com/free5gc/free5gc-compose/tree/v4.0.0)
-
-Check out the used configuration files at `config/ULCL`.
-
-## Prometheous & Grafana
-
-To start the core with Prometheous and Grafana, we need external compose service file to start with our core compose:
-
-```bash
-docker compose -f docker-compose.yaml -f docker-compose-prometheus.yaml up
-```
-
-Please make sure the metrics secions are enabled in NFs' config, it is disabled in default:
-
-```yaml
-  # Metrics configuration
-  # If using the same bindingIPv4 as the sbi server, make sure that the ports are different
-  metrics:
-=>  enable: true # (Optional, default false)
-    scheme: http # (Required) the protocol for metrics (http or https, default https)
-    bindingIPv4: amf.free5gc.org # (Required) IP used to bind the metrics endpoint (default 0.0.0.0)
-    port: 9091 # (Optional, default 9091) port used to bind the service
-    tls: # (Optional) the local path of TLS key (Could be the same as the sbi ones)
-      pem: cert/amf.pem # AMF TLS Certificate
-      key: cert/amf.key # AMF TLS Private key
-    namespace: free5gc # (Optional, default free5gc)
-```
-
-## Reference
-
-- https://github.com/open5gs/nextepc/tree/master/docker
-- https://github.com/abousselmi/docker-free5gc
+This project is forked from [free5gc/free5gc-compose](https://github.com/free5gc/free5gc-compose). See [LICENSE.txt](LICENSE.txt).
