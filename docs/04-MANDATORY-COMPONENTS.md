@@ -1594,11 +1594,34 @@ docker exec -it mongodb mongo --quiet --eval '
 
 ## Subscriber Provisioning
 
-> **Important**: Direct MongoDB shell inserts may not always work correctly with free5GC v4.2.0. The recommended approach is to use the **WebUI API** for subscriber provisioning, which stores data in the exact format expected by UDR/UDM.
+> **Important**: Direct MongoDB shell inserts may not always work correctly with free5GC v4.2.0. The recommended approach is to use the **provisioning script** which uses the WebUI API and patches MongoDB for fields the WebUI doesn't populate correctly.
 
-### Recommended: Temporary WebUI Container
+### Recommended: Provisioning Script
 
-If you don't want WebUI running permanently, use it temporarily for subscriber provisioning:
+Use the provided script which handles everything automatically (WebUI + MongoDB patches):
+
+```bash
+# From the project root directory:
+./scripts/provision-subscriber.sh
+
+# Or with custom IMSI and PLMN:
+./scripts/provision-subscriber.sh imsi-208930000000002 20893
+```
+
+The script performs these steps:
+1. Starts a temporary WebUI container
+2. Logs in to get a JWT token (default: admin/free5gc)
+3. Creates the subscriber via the WebUI API
+4. Patches MongoDB to add `allowedSessionTypes` (WebUI bug: SMF rejects PDU sessions without it)
+5. Patches MongoDB to populate `smPolicySnssaiData` (WebUI bug: PCF crashes with nil pointer without it)
+6. Removes the temporary WebUI container
+7. Verifies all data is correct
+
+### Manual Provisioning (if script is not available)
+
+If you need to provision manually, there are two steps: WebUI API + MongoDB patches.
+
+**Step 1: Create subscriber via WebUI API**
 
 ```bash
 # Start temporary WebUI container (must specify command explicitly)
@@ -1613,13 +1636,13 @@ docker run -d --name webui-temp \
 # Wait for it to start
 sleep 5
 
-# Step 1: Login to get JWT token (default credentials: admin/free5gc)
+# Login to get JWT token (default credentials: admin/free5gc)
 TOKEN=$(curl -s -X POST http://localhost:5000/api/login \
   -H 'Content-Type: application/json' \
   -d '{"username":"admin","password":"free5gc"}' | \
   python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])")
 
-# Step 2: Add subscriber via WebUI API using JWT token
+# Add subscriber via WebUI API using JWT token
 curl -X POST http://localhost:5000/api/subscriber/imsi-208930000000001/20893 \
   -H 'Content-Type: application/json' \
   -H "Token: $TOKEN" \
@@ -1675,6 +1698,30 @@ curl -X POST http://localhost:5000/api/subscriber/imsi-208930000000001/20893 \
 
 # Remove temporary WebUI container
 docker stop webui-temp && docker rm webui-temp
+```
+
+**Step 2: Patch MongoDB (required - WebUI bugs)**
+
+```bash
+# Fix 1: Add allowedSessionTypes (without this, SMF rejects PDU sessions)
+docker exec mongodb mongosh mongodb://localhost:27017/free5gc --quiet --eval "
+db['subscriptionData.provisionedData.smData'].updateMany(
+  { ueId: 'imsi-208930000000001' },
+  { \$set: { 'dnnConfigurations.internet.pduSessionTypes.allowedSessionTypes': ['IPV4'] } }
+)"
+
+# Fix 2: Populate smPolicySnssaiData (without this, PCF crashes with nil pointer)
+docker exec mongodb mongosh mongodb://localhost:27017/free5gc --quiet --eval "
+db['policyData.ues.smData'].updateOne(
+  { ueId: 'imsi-208930000000001' },
+  { \$set: {
+    smPolicySnssaiData: {
+      '01010203': { snssai: { sst: 1, sd: '010203' }, smPolicyDnnData: { internet: { dnn: 'internet' } } },
+      '01112233': { snssai: { sst: 1, sd: '112233' }, smPolicyDnnData: { internet: { dnn: 'internet' } } }
+    }
+  }},
+  { upsert: true }
+)"
 ```
 
 ---

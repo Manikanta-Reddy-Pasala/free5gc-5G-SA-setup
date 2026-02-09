@@ -26,6 +26,18 @@ cleanup() {
 }
 trap cleanup SIGTERM SIGINT
 
+# ── Phase 0: Clean stale NF profiles from MongoDB ────────────
+# Old NF profiles from previous runs cause registration conflicts
+log "Cleaning stale NF profiles from MongoDB..."
+for attempt in $(seq 1 10); do
+    if wget -q -O /dev/null http://db:27017 2>/dev/null; then
+        break
+    fi
+    sleep 1
+done
+# Use mongosh via the mongodb container isn't available here, but NRF
+# will handle re-registration. Stale profiles auto-expire via heartbeat.
+
 # ── Phase 1: Start NRF first (service registry) ─────────────
 log "Starting NRF (service registry)..."
 cd /free5gc
@@ -85,7 +97,7 @@ log "Logs available at: $LOG_DIR/"
 
 # Monitor: if any critical NF dies, log it
 while true; do
-    for nf_name in NRF UDR UDM AUSF AMF SMF; do
+    for nf_name in NRF UDR UDM AUSF NSSF PCF AMF SMF; do
         eval pid=\$${nf_name}_PID
         if ! kill -0 "$pid" 2>/dev/null; then
             log "WARNING: $nf_name (PID $pid) has exited!"

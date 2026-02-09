@@ -121,7 +121,7 @@ All **Control Plane NFs** (Service-Based Architecture components) run as process
 │      │        │                                        │          │
 │      │        │  All processes share:                  │          │
 │      │        │  - Same IP: 10.100.200.16             │          │
-│      │        │  - Same port 8000 (SBI path-based)    │          │
+│      │        │  - Unique SBI ports (8000-8007)       │          │
 │      │        │  - 8 DNS aliases (*.free5gc.org)      │          │
 │      │        └────────────────────────────────────────┘          │
 │      │                       │                                     │
@@ -206,8 +206,8 @@ RUN chmod +x ./start-cp-nfs.sh
 # Create log directory
 RUN mkdir -p /var/log/free5gc
 
-# All NFs use SBI port 8000
-EXPOSE 8000
+# Unique SBI ports per NF in consolidated mode
+EXPOSE 8000 8001 8002 8003 8004 8005 8006 8007
 
 ENTRYPOINT ["./start-cp-nfs.sh"]
 ```
@@ -282,7 +282,7 @@ log "Logs available at: $LOG_DIR/"
 
 # Monitor loop: detect if critical NFs exit unexpectedly
 while true; do
-    for nf_name in NRF UDR UDM AUSF AMF SMF; do
+    for nf_name in NRF UDR UDM AUSF NSSF PCF AMF SMF; do
         eval pid=\$${nf_name}_PID
         if ! kill -0 "$pid" 2>/dev/null; then
             log "WARNING: $nf_name (PID $pid) has exited!"
@@ -334,20 +334,20 @@ services:
     container_name: free5gc-cp
     image: free5gc-cp:v4.2.0
     volumes:
-      # All 9 NF configs mounted
-      - ./config/nrfcfg.yaml:/free5gc/config/nrfcfg.yaml
-      - ./config/amfcfg.yaml:/free5gc/config/amfcfg.yaml
-      - ./config/ausfcfg.yaml:/free5gc/config/ausfcfg.yaml
-      - ./config/udmcfg.yaml:/free5gc/config/udmcfg.yaml
-      - ./config/udrcfg.yaml:/free5gc/config/udrcfg.yaml
-      - ./config/smfcfg.yaml:/free5gc/config/smfcfg.yaml
-      - ./config/nssfcfg.yaml:/free5gc/config/nssfcfg.yaml
-      - ./config/pcfcfg.yaml:/free5gc/config/pcfcfg.yaml
-      - ./config/uerouting.yaml:/free5gc/config/uerouting.yaml
+      # Consolidated configs (unique SBI ports per NF)
+      - ./config-consolidated/nrfcfg.yaml:/free5gc/config/nrfcfg.yaml
+      - ./config-consolidated/amfcfg.yaml:/free5gc/config/amfcfg.yaml
+      - ./config-consolidated/ausfcfg.yaml:/free5gc/config/ausfcfg.yaml
+      - ./config-consolidated/udmcfg.yaml:/free5gc/config/udmcfg.yaml
+      - ./config-consolidated/udrcfg.yaml:/free5gc/config/udrcfg.yaml
+      - ./config-consolidated/smfcfg.yaml:/free5gc/config/smfcfg.yaml
+      - ./config-consolidated/nssfcfg.yaml:/free5gc/config/nssfcfg.yaml
+      - ./config-consolidated/pcfcfg.yaml:/free5gc/config/pcfcfg.yaml
+      - ./config-consolidated/uerouting.yaml:/free5gc/config/uerouting.yaml
       - ./cert:/free5gc/cert
     networks:
       privnet:
-        ipv4_address: 10.100.200.16  # AMF's standard IP
+        ipv4_address: 10.100.200.16
         aliases:
           # 8 DNS aliases - all resolve to same container
           - nrf.free5gc.org
@@ -358,8 +358,15 @@ services:
           - smf.free5gc.org
           - nssf.free5gc.org
           - pcf.free5gc.org
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:8000"]
+      interval: 5s
+      timeout: 3s
+      start_period: 15s
+      retries: 10
     depends_on:
-      - db
+      db:
+        condition: service_started
 
   # Container 3: UPF (unchanged - needs kernel module)
   free5gc-upf:
@@ -371,6 +378,9 @@ services:
       privnet:
         aliases:
           - upf.free5gc.org
+    depends_on:
+      free5gc-cp:
+        condition: service_healthy
 
   # Container 4: UERANSIM (testing)
   ueransim:
@@ -380,12 +390,18 @@ services:
       - NET_ADMIN
     devices:
       - "/dev/net/tun"
+    depends_on:
+      free5gc-cp:
+        condition: service_healthy
+      free5gc-upf:
+        condition: service_started
 ```
 
 **Critical Configuration**:
 - **8 DNS Aliases**: All NF hostnames (nrf.free5gc.org, amf.free5gc.org, etc.) resolve to same container IP `10.100.200.16`
-- **Shared SBI Port**: All NFs listen on port 8000, differentiated by HTTP path (e.g., `/nnrf-nfm/`, `/namf-comm/`)
-- **Same Config Files**: No changes to existing YAML configs - they reference DNS names as usual
+- **Unique SBI Ports**: Each NF listens on a unique port (NRF:8000, UDR:8001, UDM:8002, AUSF:8003, NSSF:8004, PCF:8005, AMF:8006, SMF:8007) since they share the same IP
+- **Consolidated Configs**: `config-consolidated/` contains NF configs with unique port assignments (different from standard `config/` which all use port 8000)
+- **Healthcheck + Depends On**: UPF and UERANSIM wait for CP container to be healthy (NRF responding) before starting, preventing SCTP connection refused errors
 - **Volume Mounts**: All 9 config files mounted into single container
 
 ### 4. How DNS Resolution Works
@@ -487,27 +503,27 @@ docker logs free5gc-cp
 
 ### Step 4: Provision Subscriber
 
-Same as standard deployment - use temporary WebUI container:
+Use the provisioning script which handles WebUI JWT authentication and patches MongoDB for two known WebUI bugs:
 
 ```bash
-# Start WebUI temporarily
-docker run --rm -d --name temp-webui \
-    --network free5gc-5G-SA-setup_privnet \
-    -p 5000:5000 \
-    -e DB_URI=mongodb://db/free5gc \
-    free5gc/webui:v4.2.0
+# Recommended: Use the provisioning script
+./scripts/provision-subscriber.sh
 
-# Access WebUI at http://localhost:5000
-# Default credentials: admin / free5gc
+# What the script does:
+# 1. Starts temporary WebUI container
+# 2. Logs in (admin/free5gc) to get JWT token
+# 3. Creates subscriber via WebUI API
+# 4. Patches MongoDB: adds allowedSessionTypes (WebUI bug - SMF rejects PDU sessions without it)
+# 5. Patches MongoDB: populates smPolicySnssaiData (WebUI bug - PCF nil pointer panic without it)
+# 6. Verifies all data, stops WebUI
 
-# Add subscriber:
-# IMSI: 001010000000001
-# K: 465B5CE8B199B49FAA5F0A2EE238A6BC
-# OP: E8ED289DEBA952E4283B54E88E6183CA
-
-# Stop WebUI after provisioning
-docker stop temp-webui
+# Custom IMSI:
+./scripts/provision-subscriber.sh imsi-208930000000002 20893
 ```
+
+> **Important**: WebUI v4.2.0 has two bugs that require MongoDB patches after subscriber creation.
+> Without these patches, PDU session establishment will fail. The provisioning script handles
+> both automatically. See Chapter 4 for manual provisioning details.
 
 ### Step 5: Test with UERANSIM
 
@@ -548,16 +564,18 @@ Docker starts 3 containers:
 **Inside free5gc-cp container**:
 ```
 Startup Script Execution:
-1. ./nrf starts (PID 123) → Listens on 0.0.0.0:8000 (path: /nnrf-*)
+1. ./nrf starts (PID 123) → Listens on 0.0.0.0:8000
 2. Script polls http://nrf.free5gc.org:8000 → Waits for NRF ready
-3. ./udr starts (PID 124) → Registers with NRF, listens on /nudr-*
-4. ./udm starts (PID 125) → Registers with NRF, listens on /nudm-*
-5. ./ausf starts (PID 126) → Registers with NRF, listens on /nausf-*
-6. ./nssf starts (PID 127) → Registers with NRF, listens on /nnssf-*
-7. ./pcf starts (PID 128) → Registers with NRF, listens on /npcf-*
-8. ./amf starts (PID 129) → Registers with NRF, listens on /namf-*, opens SCTP 38412
-9. ./smf starts (PID 130) → Registers with NRF, listens on /nsmf-*, opens PFCP to UPF
+3. ./udr starts (PID 124) → Registers with NRF, listens on port 8001
+4. ./udm starts (PID 125) → Registers with NRF, listens on port 8002
+5. ./ausf starts (PID 126) → Registers with NRF, listens on port 8003
+6. ./nssf starts (PID 127) → Registers with NRF, listens on port 8004
+7. ./pcf starts (PID 128) → Registers with NRF, listens on port 8005
+8. ./amf starts (PID 129) → Registers with NRF, listens on port 8006 + SCTP 38412
+9. ./smf starts (PID 130) → Registers with NRF, listens on port 8007 + PFCP to UPF
 ```
+
+> Each NF uses a unique SBI port because they all share the same IP (10.100.200.16).
 
 **Result**: All 8 NFs running, same HTTP endpoints, same DNS names, but inside one container.
 
@@ -588,9 +606,9 @@ UDM container → [Bridge] → UDR container → [Bridge] → MongoDB container
 ```
 UE → gNB → [Docker Bridge] → free5gc-cp container
 Inside free5gc-cp:
-  AMF process (PID 129) → HTTP localhost:8000/nausf-auth → AUSF process (PID 126)
-  AUSF process → HTTP localhost:8000/nudm-ueau → UDM process (PID 125)
-  UDM process → HTTP localhost:8000/nudr-dr → UDR process (PID 124)
+  AMF process (port 8006) → HTTP localhost:8003/nausf-auth → AUSF process (port 8003)
+  AUSF process → HTTP localhost:8002/nudm-ueau → UDM process (port 8002)
+  UDM process → HTTP localhost:8001/nudr-dr → UDR process (port 8001)
   UDR process → [Bridge] → MongoDB container
 ```
 
@@ -642,7 +660,7 @@ Inside free5gc-cp:
 **Consolidated Deployment**:
 ```
 1. UE → gNB → AMF (PID 129): PDU Session Establishment Request
-2. AMF → SMF (PID 130, same container): HTTP POST to localhost:8000/nsmf-pdusession/v1/sm-contexts
+2. AMF → SMF (PID 130, same container): HTTP POST to localhost:8007/nsmf-pdusession/v1/sm-contexts
 3. SMF → UPF (separate container): PFCP Session Establishment Request (N4)
 4. UPF → SMF: PFCP Session Establishment Response
 5. SMF → AMF (localhost): SM Context Created
@@ -1233,46 +1251,52 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
 
 ### Files Used by Consolidated Deployment
 
-All configuration files are **identical** to standard deployment. No changes needed.
+Consolidated deployment uses **separate config files** in `config-consolidated/` with unique SBI ports per NF (since all NFs share the same container IP). Standard `config/` files all use port 8000 which causes port conflicts in a single container.
 
-| File | Purpose | Mounted To |
-|------|---------|------------|
-| `config/nrfcfg.yaml` | NRF configuration (service registry) | `/free5gc/config/nrfcfg.yaml` |
-| `config/amfcfg.yaml` | AMF configuration (NGAP, PLMN, slices) | `/free5gc/config/amfcfg.yaml` |
-| `config/ausfcfg.yaml` | AUSF configuration (authentication) | `/free5gc/config/ausfcfg.yaml` |
-| `config/udmcfg.yaml` | UDM configuration (subscriber management) | `/free5gc/config/udmcfg.yaml` |
-| `config/udrcfg.yaml` | UDR configuration (MongoDB connection) | `/free5gc/config/udrcfg.yaml` |
-| `config/smfcfg.yaml` | SMF configuration (PDU session, PFCP) | `/free5gc/config/smfcfg.yaml` |
-| `config/nssfcfg.yaml` | NSSF configuration (slice selection) | `/free5gc/config/nssfcfg.yaml` |
-| `config/pcfcfg.yaml` | PCF configuration (policy control) | `/free5gc/config/pcfcfg.yaml` |
-| `config/uerouting.yaml` | SMF UE routing table | `/free5gc/config/uerouting.yaml` |
-| `config/upfcfg.yaml` | UPF configuration (N3, N4, N6) | `/free5gc/config/upfcfg.yaml` |
-| `config/gnbcfg.yaml` | UERANSIM gNB configuration | `/ueransim/config/gnbcfg.yaml` |
-| `config/uecfg.yaml` | UERANSIM UE configuration | `/ueransim/config/uecfg.yaml` |
+| File | SBI Port | Purpose | Mounted To |
+|------|----------|---------|------------|
+| `config-consolidated/nrfcfg.yaml` | 8000 | NRF configuration (service registry) | `/free5gc/config/nrfcfg.yaml` |
+| `config-consolidated/udrcfg.yaml` | 8001 | UDR configuration (MongoDB connection) | `/free5gc/config/udrcfg.yaml` |
+| `config-consolidated/udmcfg.yaml` | 8002 | UDM configuration (subscriber management) | `/free5gc/config/udmcfg.yaml` |
+| `config-consolidated/ausfcfg.yaml` | 8003 | AUSF configuration (authentication) | `/free5gc/config/ausfcfg.yaml` |
+| `config-consolidated/nssfcfg.yaml` | 8004 | NSSF configuration (slice selection) | `/free5gc/config/nssfcfg.yaml` |
+| `config-consolidated/pcfcfg.yaml` | 8005 | PCF configuration (policy control) | `/free5gc/config/pcfcfg.yaml` |
+| `config-consolidated/amfcfg.yaml` | 8006 | AMF configuration (NGAP, PLMN, slices) | `/free5gc/config/amfcfg.yaml` |
+| `config-consolidated/smfcfg.yaml` | 8007 | SMF configuration (PDU session, PFCP) | `/free5gc/config/smfcfg.yaml` |
+| `config-consolidated/uerouting.yaml` | - | SMF UE routing table | `/free5gc/config/uerouting.yaml` |
+| `config/upfcfg.yaml` | - | UPF configuration (N3, N4, N6) | `/free5gc/config/upfcfg.yaml` |
+| `config/gnbcfg.yaml` | - | UERANSIM gNB configuration | `/ueransim/config/gnbcfg.yaml` |
+| `config/uecfg.yaml` | - | UERANSIM UE configuration | `/ueransim/config/uecfg.yaml` |
 
 ### Key Configuration Parameters
 
-**No changes required** - all DNS names resolve correctly due to Docker network aliases:
+Each NF binds to a **unique SBI port** since they share IP `10.100.200.16`. The NRF URI references still use port 8000 (NRF's port), and each NF's `sbi.port` is unique:
 
 ```yaml
-# amfcfg.yaml (unchanged)
+# amfcfg.yaml (consolidated - port 8006)
 configuration:
-  nrfUri: http://nrf.free5gc.org:8000  # Resolves to 10.100.200.16 (free5gc-cp)
+  sbi:
+    port: 8006                            # Unique port for AMF
+  nrfUri: http://nrf.free5gc.org:8000     # NRF still on port 8000
   ngapIpList:
-    - 10.100.200.16  # AMF's IP (free5gc-cp container IP)
+    - 10.100.200.16                       # free5gc-cp container IP
 
-# smfcfg.yaml (unchanged)
+# smfcfg.yaml (consolidated - port 8007)
 configuration:
+  sbi:
+    port: 8007                            # Unique port for SMF
   nrfUri: http://nrf.free5gc.org:8000
   pfcp:
-    - addr: upf.free5gc.org  # UPF still separate container
+    - addr: upf.free5gc.org              # UPF still separate container
 
-# udrcfg.yaml (unchanged)
+# udrcfg.yaml (consolidated - port 8001)
 configuration:
+  sbi:
+    port: 8001                            # Unique port for UDR
   nrfUri: http://nrf.free5gc.org:8000
   mongodb:
     name: free5gc
-    url: mongodb://db:27017  # MongoDB still separate container
+    url: mongodb://db:27017              # MongoDB still separate container
 ```
 
 ### Docker Compose Services
@@ -1314,6 +1338,8 @@ services:
 - For WebUI subscriber management: See Chapter 5
 
 **References**:
-- Multi-stage Docker build: `/Users/manip/Documents/codeRepo/free5gc-5G-SA-setup/consolidated/Dockerfile.consolidated-cp`
-- Startup script: `/Users/manip/Documents/codeRepo/free5gc-5G-SA-setup/consolidated/start-cp-nfs.sh`
-- Docker Compose: `/Users/manip/Documents/codeRepo/free5gc-5G-SA-setup/docker-compose-consolidated.yaml`
+- Multi-stage Docker build: `consolidated/Dockerfile.consolidated-cp`
+- Startup script: `consolidated/start-cp-nfs.sh`
+- Docker Compose: `docker-compose-consolidated.yaml`
+- Consolidated configs: `config-consolidated/` (unique SBI ports per NF)
+- Provisioning script: `scripts/provision-subscriber.sh`

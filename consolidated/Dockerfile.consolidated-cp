@@ -45,7 +45,7 @@ RUN chmod +x ./start-cp-nfs.sh
 # Create log directory
 RUN mkdir -p /var/log/free5gc
 
-# Expose SBI port (shared by all NFs via different paths)
-EXPOSE 8000
+# Expose SBI ports (unique per NF in consolidated mode)
+EXPOSE 8000 8001 8002 8003 8004 8005 8006 8007
 
 ENTRYPOINT ["./start-cp-nfs.sh"]

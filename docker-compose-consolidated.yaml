@@ -17,6 +17,9 @@
 #
 # Then run:
 #   docker compose -f docker-compose-consolidated.yaml up -d
+#
+# After startup, provision subscriber:
+#   ./scripts/provision-subscriber.sh
 # ============================================================
 
 
@@ -70,8 +73,15 @@ services:
           - smf.free5gc.org
           - nssf.free5gc.org
           - pcf.free5gc.org
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8000"]
+      interval: 5s
+      timeout: 3s
+      start_period: 15s
+      retries: 10
     depends_on:
-      - db
+      db:
+        condition: service_started
 
   # ── Container 3: UPF (User Plane - needs kernel module) ───
   free5gc-upf:
@@ -88,7 +98,8 @@ services:
         aliases:
           - upf.free5gc.org
     depends_on:
-      - free5gc-cp
+      free5gc-cp:
+        condition: service_healthy
 
   # ── UERANSIM: gNB + UE Simulator (for testing) ────────────
   ueransim:
@@ -107,8 +118,10 @@ services:
         aliases:
           - gnb.free5gc.org
     depends_on:
-      - free5gc-cp
-      - free5gc-upf
+      free5gc-cp:
+        condition: service_healthy
+      free5gc-upf:
+        condition: service_started
 
 networks:
   privnet:
