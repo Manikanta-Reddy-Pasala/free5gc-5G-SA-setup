@@ -99,11 +99,26 @@ install_gtp5g() {
 
     log_info "Building GTP5G kernel module in Docker for kernel $KVER..."
 
+    # Detect which GCC version was used to build the kernel
+    local KERNEL_GCC_VER=""
+    if [ -f "/lib/modules/$KVER/build/include/generated/compile.h" ]; then
+        KERNEL_GCC_VER=$(grep -oP 'gcc-\K[0-9]+' "/lib/modules/$KVER/build/include/generated/compile.h" 2>/dev/null | head -1)
+    fi
+    if [ -z "$KERNEL_GCC_VER" ] && [ -f "/proc/version" ]; then
+        KERNEL_GCC_VER=$(grep -oP 'gcc-\K[0-9]+' /proc/version 2>/dev/null | head -1)
+    fi
+
+    local GCC_PKG="gcc"
+    if [ -n "$KERNEL_GCC_VER" ]; then
+        GCC_PKG="gcc-$KERNEL_GCC_VER"
+        log_info "Kernel was built with gcc-$KERNEL_GCC_VER, installing matching compiler"
+    fi
+
     docker build -t gtp5g-builder -f - "$GTP5G_BUILD_DIR" <<DOCKERFILE
 FROM ubuntu:$(lsb_release -rs)
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    linux-headers-$KVER build-essential make gcc git ca-certificates \
+    linux-headers-$KVER build-essential make $GCC_PKG git ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 RUN git clone https://github.com/free5gc/gtp5g.git /gtp5g
 WORKDIR /gtp5g
