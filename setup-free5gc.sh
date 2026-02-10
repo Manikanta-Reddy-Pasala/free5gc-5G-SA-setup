@@ -363,12 +363,12 @@ provision_subscriber_via_mongo() {
         db.subscriptionData.authenticationData.authenticationSubscription.updateOne(
             {"ueId": "imsi-208930000000001"},
             {$set: {
-                "ueId": "imsi-208930000000001", "plmnID": "20893",
-                "authenticationManagementField": "8000", "authenticationMethod": "5G_AKA",
-                "milenage": {"op": {"encryptionAlgorithm": 0, "encryptionKey": 0, "opValue": ""}},
-                "opc": {"encryptionAlgorithm": 0, "encryptionKey": 0, "opcValue": "8e27b6af0e692e750f32667a3b14605d"},
-                "permanentKey": {"encryptionAlgorithm": 0, "encryptionKey": 0, "permanentKeyValue": "8baf473f2f8fd09487cccbd7097c6862"},
-                "sequenceNumber": {"sqnScheme": "GENERAL", "sqn": "000000000020"}
+                "ueId": "imsi-208930000000001",
+                "authenticationMethod": "5G_AKA",
+                "encPermanentKey": "8baf473f2f8fd09487cccbd7097c6862",
+                "encOpcKey": "8e27b6af0e692e750f32667a3b14605d",
+                "authenticationManagementField": "8000",
+                "sequenceNumber": {"sqn": "000000000020"}
             }}, {upsert: true}
         );
         db.subscriptionData.provisionedData.amData.updateOne(
@@ -424,7 +424,7 @@ fix_subscriber_sqn() {
         db = db.getSiblingDB("free5gc");
         db.subscriptionData.authenticationData.authenticationSubscription.updateOne(
             {"ueId": "imsi-208930000000001"},
-            {$set: {"sequenceNumber": {"sqnScheme": "GENERAL", "sqn": "000000000020"}}}
+            {$set: {"sequenceNumber": {"sqn": "000000000020"}}}
         );
         print("SQN set to 000000000020");
     '
