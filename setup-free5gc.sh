@@ -8,9 +8,9 @@ set -euo pipefail
 # UERANSIM version: v3.2.7
 #
 # Install Modes:
-#   full         - All NFs + UERANSIM + N3IWF + TNGF + N3IWUE + WebUI
-#   minimal      - Core NFs + UERANSIM only (fastest, lowest resources)
-#   consolidated - Core NFs + UERANSIM + WebUI (recommended)
+#   minimal      - 4 containers: all-in-one CP + UPF + MongoDB + UERANSIM (default)
+#   consolidated - 12 containers: individual core NFs + WebUI + UERANSIM
+#   full         - 16 containers: everything including N3IWF, TNGF, NEF, CHF
 # ============================================================
 
 RED='\033[0;31m'
@@ -24,7 +24,9 @@ log_info()  { echo -e "${GREEN}[INFO]${NC} $1"; }
 log_warn()  { echo -e "${YELLOW}[WARN]${NC} $1"; }
 log_error() { echo -e "${RED}[ERROR]${NC} $1"; }
 
-INSTALL_DIR="/root/free5gc-compose"
+# SCRIPT_DIR is where this script (and compose files) live
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 SUBSCRIBER_IMSI="imsi-208930000000001"
 SUBSCRIBER_PLMN="20893"
 WEBUI_URL="http://localhost:5000"
@@ -35,24 +37,17 @@ WEBUI_PASS="free5gc"
 INSTALL_MODE="${INSTALL_MODE:-}"
 
 # ============================================================
-# Service profiles for each install mode
+# Compose file and service mapping per mode
 # ============================================================
 
-# Core NFs required for basic 5G attach + PDU session
-CORE_SERVICES="db free5gc-nrf free5gc-amf free5gc-ausf free5gc-nssf free5gc-pcf free5gc-smf free5gc-udm free5gc-udr free5gc-upf ueransim"
+# Services for consolidated mode (individual NFs, no N3IWF/TNGF/CHF/NEF/N3IWUE)
+CONSOLIDATED_SERVICES="db free5gc-nrf free5gc-amf free5gc-ausf free5gc-nssf free5gc-pcf free5gc-smf free5gc-udm free5gc-udr free5gc-upf free5gc-webui ueransim"
 
-# Core + WebUI (for subscriber management via browser)
-CONSOLIDATED_SERVICES="$CORE_SERVICES free5gc-webui"
-
-# Everything
-FULL_SERVICES="$CONSOLIDATED_SERVICES free5gc-chf free5gc-n3iwf free5gc-tngf free5gc-nef n3iwue"
-
-get_services() {
+get_compose_cmd() {
     case "$INSTALL_MODE" in
-        minimal)       echo "$CORE_SERVICES" ;;
-        consolidated)  echo "$CONSOLIDATED_SERVICES" ;;
-        full)          echo "$FULL_SERVICES" ;;
-        *)             echo "$FULL_SERVICES" ;;
+        minimal)      echo "docker compose -f $SCRIPT_DIR/docker-compose-consolidated.yaml" ;;
+        consolidated) echo "docker compose -f $SCRIPT_DIR/docker-compose.yaml" ;;
+        full)         echo "docker compose -f $SCRIPT_DIR/docker-compose.yaml" ;;
     esac
 }
 
@@ -104,7 +99,6 @@ install_gtp5g() {
 
     log_info "Building GTP5G kernel module in Docker for kernel $KVER..."
 
-    # Build gtp5g.ko inside a Docker container with matching kernel headers
     docker build -t gtp5g-builder -f - "$GTP5G_BUILD_DIR" <<DOCKERFILE
 FROM ubuntu:$(lsb_release -rs)
 ENV DEBIAN_FRONTEND=noninteractive
@@ -122,7 +116,6 @@ RUN LATEST_TAG=\$(git tag --sort=-version:refname | head -1) && \
     echo "Build successful: \$(ls -la gtp5g.ko)"
 DOCKERFILE
 
-    # Copy the built .ko from the container to host
     local container_id
     container_id=$(docker create gtp5g-builder)
     docker cp "$container_id:/gtp5g/gtp5g.ko" "$GTP5G_KO"
@@ -136,18 +129,13 @@ DOCKERFILE
 
     log_info "GTP5G module built successfully, installing on host..."
 
-    # Install the .ko to the kernel modules directory
     local ko_dest="/lib/modules/$KVER/kernel/drivers/net"
     mkdir -p "$ko_dest"
     cp "$GTP5G_KO" "$ko_dest/gtp5g.ko"
-
-    # Update module dependencies
     depmod -a "$KVER"
 
-    # Load udp_tunnel dependency first
     modprobe udp_tunnel 2>/dev/null || true
 
-    # Try modprobe first, fall back to insmod
     if ! modprobe gtp5g 2>/dev/null; then
         log_warn "modprobe failed, trying insmod..."
         insmod "$GTP5G_KO" 2>&1 || true
@@ -157,7 +145,6 @@ DOCKERFILE
 
     if lsmod | grep -q gtp5g; then
         log_info "GTP5G kernel module loaded successfully ($(modinfo -F version gtp5g 2>/dev/null || echo 'unknown version'))"
-        # Ensure module loads on boot
         echo "udp_tunnel" > /etc/modules-load.d/gtp5g.conf
         echo "gtp5g" >> /etc/modules-load.d/gtp5g.conf
     else
@@ -171,9 +158,7 @@ DOCKERFILE
             sb_state=$(mokutil --sb-state 2>/dev/null || echo "unknown")
             if echo "$sb_state" | grep -qi "enabled"; then
                 log_error "Secure Boot is ENABLED - unsigned kernel modules cannot be loaded"
-                log_warn "Options to fix:"
-                log_warn "  1. Disable Secure Boot in BIOS/UEFI settings"
-                log_warn "  2. Sign the module: see https://wiki.ubuntu.com/UEFI/SecureBoot/Signing"
+                log_warn "Disable Secure Boot in BIOS/UEFI settings"
             fi
         fi
         exit 1
@@ -181,51 +166,58 @@ DOCKERFILE
 }
 
 # ============================================================
-# Phase 2: Clone and Configure free5GC
+# Phase 2: Build all-in-one CP image (minimal mode only)
 # ============================================================
-clone_free5gc() {
-    log_info "Cloning free5gc-compose repository..."
-
-    if [ -d "$INSTALL_DIR" ]; then
-        log_warn "Directory $INSTALL_DIR already exists, pulling latest..."
-        cd "$INSTALL_DIR" && git pull || true
-    else
-        cd /root
-        git clone https://github.com/free5gc/free5gc-compose.git
+build_consolidated_cp() {
+    if docker image inspect free5gc-cp:v4.2.0 > /dev/null 2>&1; then
+        log_info "free5gc-cp:v4.2.0 image already exists"
+        return 0
     fi
 
-    cd "$INSTALL_DIR"
-    log_info "free5gc-compose cloned at $INSTALL_DIR"
+    log_info "Building consolidated control plane image (8 NFs in 1)..."
+    docker build -t free5gc-cp:v4.2.0 \
+        -f "$SCRIPT_DIR/consolidated/Dockerfile.consolidated-cp" \
+        "$SCRIPT_DIR/consolidated/"
+    log_info "free5gc-cp:v4.2.0 built successfully"
 }
 
 # ============================================================
 # Phase 3: Start Services
 # ============================================================
 start_services() {
-    local services
-    services=$(get_services)
+    local compose_cmd
+    compose_cmd=$(get_compose_cmd)
 
     log_info "Starting services (${BOLD}$INSTALL_MODE${NC} mode)..."
-    log_info "Services: $(echo $services | tr ' ' ', ')"
 
-    cd "$INSTALL_DIR"
+    case "$INSTALL_MODE" in
+        minimal)
+            # Build CP image if needed, then start all 4 services
+            build_consolidated_cp
+            $compose_cmd pull free5gc-upf ueransim db 2>/dev/null || true
+            $compose_cmd up -d
+            log_info "Waiting 30 seconds for all-in-one CP to initialize..."
+            sleep 30
+            ;;
+        consolidated)
+            $compose_cmd pull $CONSOLIDATED_SERVICES
+            $compose_cmd up -d $CONSOLIDATED_SERVICES
+            log_info "Waiting 25 seconds for services to initialize..."
+            sleep 25
+            ;;
+        full)
+            $compose_cmd pull
+            $compose_cmd up -d
+            log_info "Waiting 25 seconds for services to initialize..."
+            sleep 25
+            ;;
+    esac
 
-    # Pull only the needed images
-    docker compose pull $services
-
-    # Start only the selected services
-    docker compose up -d $services
-
-    log_info "Waiting 25 seconds for all services to initialize..."
-    sleep 25
-
-    # Verify containers are running
+    # Show running containers
     local running
-    running=$(docker compose ps --format json 2>/dev/null | grep -c '"running"' || docker compose ps 2>/dev/null | grep -c "Up")
+    running=$($compose_cmd ps --format json 2>/dev/null | grep -c '"running"' || $compose_cmd ps 2>/dev/null | grep -c "Up")
     log_info "$running containers running"
-
-    # Print status
-    docker compose ps --format "table {{.Name}}\t{{.Status}}"
+    $compose_cmd ps --format "table {{.Name}}\t{{.Status}}"
 }
 
 # ============================================================
@@ -234,27 +226,77 @@ start_services() {
 provision_subscriber() {
     log_info "Provisioning test subscriber ($SUBSCRIBER_IMSI)..."
 
-    if [ "$INSTALL_MODE" = "minimal" ]; then
-        # No WebUI in minimal mode - provision directly via MongoDB
-        log_info "Minimal mode: provisioning subscriber directly via MongoDB..."
+    if [ "$INSTALL_MODE" = "minimal" ] || [ "$INSTALL_MODE" = "consolidated" ]; then
+        # For consolidated mode, try WebUI first; for minimal, go straight to MongoDB
+        if [ "$INSTALL_MODE" = "consolidated" ]; then
+            local token
+            token=$(curl -s -X POST "$WEBUI_URL/api/login" \
+                -H "Content-Type: application/json" \
+                -d "{\"username\":\"$WEBUI_USER\",\"password\":\"$WEBUI_PASS\"}" \
+                | python3 -c "import sys,json; print(json.load(sys.stdin).get('access_token',''))" 2>/dev/null || echo "")
+
+            if [ -n "$token" ]; then
+                local http_code
+                http_code=$(curl -s -o /dev/null -w "%{http_code}" \
+                    -X POST "$WEBUI_URL/api/subscriber/$SUBSCRIBER_IMSI/$SUBSCRIBER_PLMN" \
+                    -H "Content-Type: application/json" \
+                    -H "Token: $token" \
+                    -d @- <<'ENDJSON'
+{
+  "plmnID": "20893",
+  "ueId": "imsi-208930000000001",
+  "AuthenticationSubscription": {
+    "authenticationManagementField": "8000",
+    "authenticationMethod": "5G_AKA",
+    "milenage": {"op": {"encryptionAlgorithm": 0, "encryptionKey": 0, "opValue": ""}},
+    "opc": {"encryptionAlgorithm": 0, "encryptionKey": 0, "opcValue": "8e27b6af0e692e750f32667a3b14605d"},
+    "permanentKey": {"encryptionAlgorithm": 0, "encryptionKey": 0, "permanentKeyValue": "8baf473f2f8fd09487cccbd7097c6862"},
+    "sequenceNumber": "16f3b3f70fc2"
+  },
+  "AccessAndMobilitySubscriptionData": {
+    "gpsis": ["msisdn-0900000000"],
+    "nssai": {"defaultSingleNssais": [{"sst": 1, "sd": "010203"}], "singleNssais": [{"sst": 1, "sd": "112233"}]},
+    "subscribedUeAmbr": {"downlink": "2 Gbps", "uplink": "1 Gbps"}
+  },
+  "SessionManagementSubscriptionData": [
+    {"singleNssai": {"sst": 1, "sd": "010203"}, "dnnConfigurations": {"internet": {"sscModes": {"defaultSscMode": "SSC_MODE_1", "allowedSscModes": ["SSC_MODE_2", "SSC_MODE_3"]}, "pduSessionTypes": {"defaultSessionType": "IPV4", "allowedSessionTypes": ["IPV4"]}, "sessionAmbr": {"uplink": "200 Mbps", "downlink": "100 Mbps"}, "5gQosProfile": {"5qi": 9, "arp": {"priorityLevel": 8, "preemptCap": "", "preemptVuln": ""}}}}},
+    {"singleNssai": {"sst": 1, "sd": "112233"}, "dnnConfigurations": {"internet": {"sscModes": {"defaultSscMode": "SSC_MODE_1", "allowedSscModes": ["SSC_MODE_2", "SSC_MODE_3"]}, "pduSessionTypes": {"defaultSessionType": "IPV4", "allowedSessionTypes": ["IPV4"]}, "sessionAmbr": {"uplink": "200 Mbps", "downlink": "100 Mbps"}, "5gQosProfile": {"5qi": 9, "arp": {"priorityLevel": 8, "preemptCap": "", "preemptVuln": ""}}}}}
+  ],
+  "SmfSelectionSubscriptionData": {"subscribedSnssaiInfos": {"01010203": {"dnnInfos": [{"dnn": "internet"}]}, "01112233": {"dnnInfos": [{"dnn": "internet"}]}}},
+  "AmPolicyData": {"subscCats": ["free5gc"]},
+  "SmPolicyData": {"smPolicySnssaiData": {"01010203": {"snssai": {"sst": 1, "sd": "010203"}, "smPolicyDnnData": {"internet": {"dnn": "internet"}}}, "01112233": {"snssai": {"sst": 1, "sd": "112233"}, "smPolicyDnnData": {"internet": {"dnn": "internet"}}}}},
+  "FlowRules": []
+}
+ENDJSON
+                )
+                if [ "$http_code" = "201" ]; then
+                    log_info "Subscriber created via WebUI (HTTP 201)"
+                else
+                    log_warn "Subscriber creation returned HTTP $http_code (may already exist)"
+                fi
+                fix_subscriber_sqn
+                return
+            fi
+            log_warn "WebUI not ready, falling back to MongoDB provisioning..."
+        fi
+
         provision_subscriber_via_mongo
         return
     fi
 
-    # Login to WebUI
+    # Full mode - try WebUI, fallback to MongoDB
     local token
     token=$(curl -s -X POST "$WEBUI_URL/api/login" \
         -H "Content-Type: application/json" \
         -d "{\"username\":\"$WEBUI_USER\",\"password\":\"$WEBUI_PASS\"}" \
-        | python3 -c "import sys,json; print(json.load(sys.stdin).get('access_token',''))")
+        | python3 -c "import sys,json; print(json.load(sys.stdin).get('access_token',''))" 2>/dev/null || echo "")
 
     if [ -z "$token" ]; then
-        log_warn "WebUI login failed, falling back to direct MongoDB provisioning..."
+        log_warn "WebUI login failed, falling back to MongoDB..."
         provision_subscriber_via_mongo
         return
     fi
 
-    # Create subscriber via API
     local http_code
     http_code=$(curl -s -o /dev/null -w "%{http_code}" \
         -X POST "$WEBUI_URL/api/subscriber/$SUBSCRIBER_IMSI/$SUBSCRIBER_PLMN" \
@@ -299,105 +341,69 @@ ENDJSON
 }
 
 provision_subscriber_via_mongo() {
-    log_info "Inserting subscriber directly into MongoDB..."
+    log_info "Provisioning subscriber directly via MongoDB..."
 
     docker exec mongodb mongo --quiet --eval '
         db = db.getSiblingDB("free5gc");
-
-        // Upsert authentication subscription
         db.subscriptionData.authenticationData.authenticationSubscription.updateOne(
             {"ueId": "imsi-208930000000001"},
             {$set: {
-                "ueId": "imsi-208930000000001",
-                "plmnID": "20893",
-                "authenticationManagementField": "8000",
-                "authenticationMethod": "5G_AKA",
+                "ueId": "imsi-208930000000001", "plmnID": "20893",
+                "authenticationManagementField": "8000", "authenticationMethod": "5G_AKA",
                 "milenage": {"op": {"encryptionAlgorithm": 0, "encryptionKey": 0, "opValue": ""}},
                 "opc": {"encryptionAlgorithm": 0, "encryptionKey": 0, "opcValue": "8e27b6af0e692e750f32667a3b14605d"},
                 "permanentKey": {"encryptionAlgorithm": 0, "encryptionKey": 0, "permanentKeyValue": "8baf473f2f8fd09487cccbd7097c6862"},
                 "sequenceNumber": {"sqnScheme": "GENERAL", "sqn": "000000000020"}
-            }},
-            {upsert: true}
+            }}, {upsert: true}
         );
-
-        // Upsert AM data
         db.subscriptionData.provisionedData.amData.updateOne(
             {"ueId": "imsi-208930000000001", "servingPlmnId": "20893"},
             {$set: {
-                "ueId": "imsi-208930000000001",
-                "servingPlmnId": "20893",
+                "ueId": "imsi-208930000000001", "servingPlmnId": "20893",
                 "gpsis": ["msisdn-0900000000"],
                 "nssai": {"defaultSingleNssais": [{"sst": 1, "sd": "010203"}], "singleNssais": [{"sst": 1, "sd": "112233"}]},
                 "subscribedUeAmbr": {"downlink": "2 Gbps", "uplink": "1 Gbps"}
-            }},
-            {upsert: true}
+            }}, {upsert: true}
         );
-
-        // Upsert SM data - slice 1
         db.subscriptionData.provisionedData.smData.updateOne(
             {"ueId": "imsi-208930000000001", "servingPlmnId": "20893", "singleNssai.sst": 1, "singleNssai.sd": "010203"},
             {$set: {
-                "ueId": "imsi-208930000000001",
-                "servingPlmnId": "20893",
+                "ueId": "imsi-208930000000001", "servingPlmnId": "20893",
                 "singleNssai": {"sst": 1, "sd": "010203"},
                 "dnnConfigurations": {"internet": {"sscModes": {"defaultSscMode": "SSC_MODE_1", "allowedSscModes": ["SSC_MODE_2","SSC_MODE_3"]}, "pduSessionTypes": {"defaultSessionType": "IPV4", "allowedSessionTypes": ["IPV4"]}, "sessionAmbr": {"uplink": "200 Mbps", "downlink": "100 Mbps"}, "5gQosProfile": {"5qi": 9, "arp": {"priorityLevel": 8, "preemptCap": "", "preemptVuln": ""}}}}
-            }},
-            {upsert: true}
+            }}, {upsert: true}
         );
-
-        // Upsert SM data - slice 2
         db.subscriptionData.provisionedData.smData.updateOne(
             {"ueId": "imsi-208930000000001", "servingPlmnId": "20893", "singleNssai.sst": 1, "singleNssai.sd": "112233"},
             {$set: {
-                "ueId": "imsi-208930000000001",
-                "servingPlmnId": "20893",
+                "ueId": "imsi-208930000000001", "servingPlmnId": "20893",
                 "singleNssai": {"sst": 1, "sd": "112233"},
                 "dnnConfigurations": {"internet": {"sscModes": {"defaultSscMode": "SSC_MODE_1", "allowedSscModes": ["SSC_MODE_2","SSC_MODE_3"]}, "pduSessionTypes": {"defaultSessionType": "IPV4", "allowedSessionTypes": ["IPV4"]}, "sessionAmbr": {"uplink": "200 Mbps", "downlink": "100 Mbps"}, "5gQosProfile": {"5qi": 9, "arp": {"priorityLevel": 8, "preemptCap": "", "preemptVuln": ""}}}}
-            }},
-            {upsert: true}
+            }}, {upsert: true}
         );
-
-        // Upsert SMF selection data
         db.subscriptionData.provisionedData.smfSelectionSubscriptionData.updateOne(
             {"ueId": "imsi-208930000000001", "servingPlmnId": "20893"},
-            {$set: {
-                "ueId": "imsi-208930000000001",
-                "servingPlmnId": "20893",
-                "subscribedSnssaiInfos": {"01010203": {"dnnInfos": [{"dnn": "internet"}]}, "01112233": {"dnnInfos": [{"dnn": "internet"}]}}
-            }},
+            {$set: {"ueId": "imsi-208930000000001", "servingPlmnId": "20893",
+                "subscribedSnssaiInfos": {"01010203": {"dnnInfos": [{"dnn": "internet"}]}, "01112233": {"dnnInfos": [{"dnn": "internet"}]}}}},
             {upsert: true}
         );
-
-        // Upsert AM policy
         db.policyData.ues.amData.updateOne(
             {"ueId": "imsi-208930000000001"},
-            {$set: {"ueId": "imsi-208930000000001", "subscCats": ["free5gc"]}},
-            {upsert: true}
+            {$set: {"ueId": "imsi-208930000000001", "subscCats": ["free5gc"]}}, {upsert: true}
         );
-
-        // Upsert SM policy
         db.policyData.ues.smData.updateOne(
             {"ueId": "imsi-208930000000001"},
-            {$set: {
-                "ueId": "imsi-208930000000001",
-                "smPolicySnssaiData": {
-                    "01010203": {"snssai": {"sst": 1, "sd": "010203"}, "smPolicyDnnData": {"internet": {"dnn": "internet"}}},
-                    "01112233": {"snssai": {"sst": 1, "sd": "112233"}, "smPolicyDnnData": {"internet": {"dnn": "internet"}}}
-                }
-            }},
-            {upsert: true}
+            {$set: {"ueId": "imsi-208930000000001", "smPolicySnssaiData": {
+                "01010203": {"snssai": {"sst": 1, "sd": "010203"}, "smPolicyDnnData": {"internet": {"dnn": "internet"}}},
+                "01112233": {"snssai": {"sst": 1, "sd": "112233"}, "smPolicyDnnData": {"internet": {"dnn": "internet"}}}
+            }}}, {upsert: true}
         );
-
         print("Subscriber provisioned via MongoDB");
     '
-
     log_info "Subscriber provisioned directly via MongoDB"
 }
 
 fix_subscriber_sqn() {
-    # IMPORTANT: Fix SQN for UERANSIM compatibility
-    # UERANSIM starts with SQN-MS=0, so the network SQN must be a small positive value
-    # The default "16f3b3f70fc2" is too large and causes SQN out-of-range errors
     log_info "Setting subscriber SQN for UERANSIM compatibility..."
     docker exec mongodb mongo --quiet --eval '
         db = db.getSiblingDB("free5gc");
@@ -415,13 +421,12 @@ fix_subscriber_sqn() {
 start_ue_and_test() {
     log_info "Restarting UERANSIM and starting UE..."
 
-    cd "$INSTALL_DIR"
+    local compose_cmd
+    compose_cmd=$(get_compose_cmd)
 
-    # Restart ueransim container to ensure clean state
-    docker compose restart ueransim
+    $compose_cmd restart ueransim
     sleep 8
 
-    # Verify gNB is connected
     local gnb_ok
     gnb_ok=$(docker logs ueransim 2>&1 | grep -c "NG Setup procedure is successful" || true)
     if [ "$gnb_ok" -ge 1 ]; then
@@ -432,12 +437,10 @@ start_ue_and_test() {
         exit 1
     fi
 
-    # Start UE in background
     docker exec -d ueransim ./nr-ue -c ./config/uecfg.yaml
     log_info "Waiting 15 seconds for UE registration..."
     sleep 15
 
-    # Check UE status
     local ue_status
     ue_status=$(docker exec ueransim ./nr-cli imsi-208930000000001 -e "status" 2>&1)
     echo ""
@@ -448,16 +451,14 @@ start_ue_and_test() {
         log_info "UE Registration: SUCCESS"
     else
         log_error "UE Registration: FAILED"
-        log_warn "Check AMF logs: docker logs amf"
+        log_warn "Check AMF logs: docker logs amf (or docker logs free5gc-cp)"
         return 1
     fi
 
-    # Check PDU sessions
     echo ""
     echo "=== PDU Sessions ==="
     docker exec ueransim ./nr-cli imsi-208930000000001 -e "ps-list" 2>&1
 
-    # Ping tests
     echo ""
     echo "=== Connectivity Tests ==="
     log_info "Ping test via PDU Session 1 (uesimtun0)..."
@@ -476,22 +477,22 @@ start_ue_and_test() {
 # ============================================================
 stop_services() {
     log_info "Stopping all free5GC services..."
-    cd "$INSTALL_DIR"
-    docker compose down
+    # Try both compose files to ensure everything is stopped
+    docker compose -f "$SCRIPT_DIR/docker-compose-consolidated.yaml" down 2>/dev/null || true
+    docker compose -f "$SCRIPT_DIR/docker-compose.yaml" down 2>/dev/null || true
     log_info "All services stopped"
 }
 
 clean_all() {
     log_info "Stopping services and removing all data..."
-    cd "$INSTALL_DIR"
-    docker compose down -v
+    docker compose -f "$SCRIPT_DIR/docker-compose-consolidated.yaml" down -v 2>/dev/null || true
+    docker compose -f "$SCRIPT_DIR/docker-compose.yaml" down -v 2>/dev/null || true
     log_info "All services stopped and volumes removed"
 }
 
 show_status() {
-    cd "$INSTALL_DIR"
     echo "=== Container Status ==="
-    docker compose ps 2>&1
+    docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Image}}" --filter "name=mongodb" --filter "name=free5gc" --filter "name=upf" --filter "name=ueransim" --filter "name=amf" --filter "name=smf" --filter "name=nrf" --filter "name=ausf" --filter "name=udm" --filter "name=udr" --filter "name=nssf" --filter "name=pcf" --filter "name=webui" --filter "name=chf" --filter "name=nef" --filter "name=n3iwf" --filter "name=tngf" --filter "name=n3iwue" 2>&1
     echo ""
     echo "=== UE Status ==="
     docker exec ueransim ./nr-cli imsi-208930000000001 -e "status" 2>&1 || echo "UE not running"
@@ -502,7 +503,6 @@ show_status() {
 
 show_logs() {
     local service="${1:-amf}"
-    cd "$INSTALL_DIR"
     docker logs --tail 50 "$service" 2>&1
 }
 
@@ -513,21 +513,19 @@ print_mode_banner() {
     echo -e "${CYAN}${BOLD}============================================${NC}"
     case "$INSTALL_MODE" in
         minimal)
-            echo -e " ${GREEN}Core 5GC + UERANSIM (11 containers)${NC}"
-            echo -e " MongoDB, NRF, AMF, AUSF, NSSF, PCF,"
-            echo -e " SMF, UDM, UDR, UPF, UERANSIM"
-            echo -e " ${YELLOW}No WebUI - subscriber via MongoDB${NC}"
+            echo -e " ${GREEN}All-in-one CP + UPF + MongoDB + UERANSIM (4 containers)${NC}"
+            echo -e " 8 NFs merged into 1 container (free5gc-cp)"
+            echo -e " ${YELLOW}Fastest startup, lowest resource usage${NC}"
             ;;
         consolidated)
-            echo -e " ${GREEN}Core 5GC + UERANSIM + WebUI (12 containers)${NC}"
+            echo -e " ${GREEN}Individual core NFs + WebUI + UERANSIM (12 containers)${NC}"
             echo -e " MongoDB, NRF, AMF, AUSF, NSSF, PCF,"
             echo -e " SMF, UDM, UDR, UPF, UERANSIM, WebUI"
             echo -e " ${YELLOW}Skips: N3IWF, TNGF, N3IWUE, NEF, CHF${NC}"
             ;;
         full)
             echo -e " ${GREEN}All NFs + UERANSIM + WebUI (16 containers)${NC}"
-            echo -e " Everything including N3IWF, TNGF, N3IWUE,"
-            echo -e " NEF, CHF"
+            echo -e " Everything including N3IWF, TNGF, N3IWUE, NEF, CHF"
             ;;
     esac
     echo -e "${CYAN}${BOLD}============================================${NC}"
@@ -535,7 +533,6 @@ print_mode_banner() {
 }
 
 select_mode() {
-    # If mode already set via env or argument, validate and return
     if [ -n "$INSTALL_MODE" ]; then
         case "$INSTALL_MODE" in
             full|minimal|consolidated) return 0 ;;
@@ -546,16 +543,16 @@ select_mode() {
     echo ""
     echo -e "${BOLD}Select installation mode:${NC}"
     echo ""
-    echo -e "  ${GREEN}1)${NC} ${BOLD}full${NC}          - All NFs + UERANSIM + N3IWF + TNGF + N3IWUE + WebUI (16 containers)"
-    echo -e "  ${GREEN}2)${NC} ${BOLD}minimal${NC}       - Core NFs + UERANSIM only (11 containers, fastest startup)"
-    echo -e "  ${GREEN}3)${NC} ${BOLD}consolidated${NC}  - Core NFs + UERANSIM + WebUI (12 containers, recommended)"
+    echo -e "  ${GREEN}1)${NC} ${BOLD}minimal${NC}       - 4 containers: all-in-one CP + UPF + DB + UERANSIM (default)"
+    echo -e "  ${GREEN}2)${NC} ${BOLD}consolidated${NC}  - 12 containers: individual NFs + WebUI + UERANSIM"
+    echo -e "  ${GREEN}3)${NC} ${BOLD}full${NC}          - 16 containers: everything including N3IWF, TNGF, NEF, CHF"
     echo ""
-    read -r -p "Enter choice [1/2/3] (default: 3): " choice
+    read -r -p "Enter choice [1/2/3] (default: 1): " choice
 
-    case "${choice:-3}" in
-        1|full)          INSTALL_MODE="full" ;;
-        2|minimal)       INSTALL_MODE="minimal" ;;
-        3|consolidated)  INSTALL_MODE="consolidated" ;;
+    case "${choice:-1}" in
+        1|minimal)       INSTALL_MODE="minimal" ;;
+        2|consolidated)  INSTALL_MODE="consolidated" ;;
+        3|full)          INSTALL_MODE="full" ;;
         *)               log_error "Invalid choice: $choice"; exit 1 ;;
     esac
 }
@@ -570,26 +567,24 @@ usage() {
     echo "  install [mode] - Full installation (Docker, GTP5G, free5GC, subscriber, test)"
     echo "  start [mode]   - Start services and UE"
     echo "  stop           - Stop all services"
-    echo "  restart        - Restart all services (preserves data)"
+    echo "  restart [mode] - Restart services"
     echo "  test           - Run UE registration and connectivity tests"
     echo "  status         - Show service and UE status"
     echo "  logs [svc]     - Show logs for a service (default: amf)"
     echo "  clean          - Stop and remove all data (destructive)"
     echo ""
     echo "Install Modes:"
-    echo "  full           - All NFs + UERANSIM + N3IWF + TNGF + N3IWUE + WebUI (16 containers)"
-    echo "  minimal        - Core NFs + UERANSIM only (11 containers, fastest)"
-    echo "  consolidated   - Core NFs + UERANSIM + WebUI (12 containers, recommended)"
+    echo "  minimal        - 4 containers: all-in-one CP + UPF + DB + UERANSIM (default)"
+    echo "  consolidated   - 12 containers: individual core NFs + WebUI + UERANSIM"
+    echo "  full           - 16 containers: everything"
     echo ""
     echo "Examples:"
-    echo "  $0 install                    # Interactive mode selection"
-    echo "  $0 install full               # Full install with all NFs"
-    echo "  $0 install minimal            # Minimal core + UERANSIM"
-    echo "  $0 install consolidated       # Recommended: core + WebUI"
-    echo "  $0 start minimal              # Start only core services"
-    echo "  INSTALL_MODE=minimal $0 start # Alternative: use env var"
+    echo "  $0 install                    # Default: minimal (4 containers)"
+    echo "  $0 install minimal            # All-in-one CP (fastest)"
+    echo "  $0 install consolidated       # Individual NFs + WebUI"
+    echo "  $0 install full               # Everything"
     echo "  $0 status                     # Check everything"
-    echo "  $0 logs smf                   # View SMF logs"
+    echo "  $0 logs free5gc-cp            # View all-in-one CP logs"
 }
 
 # Parse mode from second argument if provided
@@ -605,7 +600,6 @@ case "${1:-}" in
         print_mode_banner
         install_docker
         install_gtp5g
-        clone_free5gc
         start_services
         provision_subscriber
         start_ue_and_test
@@ -622,18 +616,23 @@ case "${1:-}" in
     start)
         select_mode
         print_mode_banner
-        cd "$INSTALL_DIR"
-        local_services=$(get_services)
-        docker compose up -d $local_services
-        sleep 20
+        start_services
         start_ue_and_test
         ;;
     stop)
         stop_services
         ;;
     restart)
-        cd "$INSTALL_DIR"
-        docker compose restart
+        if [ -n "${2:-}" ]; then
+            case "${2:-}" in
+                full|minimal|consolidated) INSTALL_MODE="$2" ;;
+            esac
+        fi
+        if [ -z "$INSTALL_MODE" ]; then
+            select_mode
+        fi
+        local_compose=$(get_compose_cmd)
+        $local_compose restart
         sleep 20
         start_ue_and_test
         ;;

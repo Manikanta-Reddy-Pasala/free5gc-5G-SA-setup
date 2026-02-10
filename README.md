@@ -19,7 +19,7 @@ Your Phone (UE)          5G Base Station (gNB)        5G Core Network
                                                          └─────────┘
 ```
 
-**Up to 16 containers** running a complete 5G SA network with 2 network slices, subscriber management, and internet connectivity. Choose the install mode that fits your use case.
+**As few as 4 containers** (or up to 16) running a complete 5G SA network with 2 network slices, subscriber management, and internet connectivity. Choose the install mode that fits your use case.
 
 ## Quick Start
 
@@ -37,23 +37,23 @@ This handles everything: Docker, GTP5G kernel module (built via Docker for kerne
 
 | Mode | Containers | What's Included | Best For |
 |------|-----------|-----------------|----------|
-| **`full`** | 16 | All NFs + UERANSIM + N3IWF + TNGF + N3IWUE + WebUI | Complete lab with Wi-Fi access, charging, NEF |
-| **`minimal`** | 11 | Core NFs + UERANSIM (no WebUI) | Quick testing, CI/CD, low-resource machines |
-| **`consolidated`** | 12 | Core NFs + UERANSIM + WebUI | **Recommended** - everything you need for most labs |
+| **`minimal`** (default) | 4 | All-in-one CP + UPF + MongoDB + UERANSIM | **Recommended** - fastest startup, lowest resources |
+| **`consolidated`** | 12 | Individual core NFs + WebUI + UERANSIM | When you need per-NF logs/scaling + WebUI |
+| **`full`** | 16 | Everything + N3IWF + TNGF + N3IWUE + CHF + NEF | Complete lab with Wi-Fi access, charging, NEF |
 
 ```bash
-# Interactive mode selection (prompts you)
+# Interactive mode selection (prompts you, default: minimal)
 ./setup-free5gc.sh install
 
 # Or specify directly
-./setup-free5gc.sh install full
-./setup-free5gc.sh install minimal
-./setup-free5gc.sh install consolidated
+./setup-free5gc.sh install minimal        # 4 containers (default)
+./setup-free5gc.sh install consolidated   # 12 containers
+./setup-free5gc.sh install full           # 16 containers
 ```
 
-**Minimal** skips WebUI, N3IWF, TNGF, N3IWUE, NEF, and CHF. Subscribers are provisioned directly via MongoDB.
-**Consolidated** adds the WebUI for browser-based subscriber management.
-**Full** includes everything for complete 5G SA testing including non-3GPP access.
+**Minimal** merges 8 control plane NFs (NRF, AMF, AUSF, UDM, UDR, SMF, NSSF, PCF) into a single `free5gc-cp` container. No WebUI - subscribers are provisioned directly via MongoDB.
+**Consolidated** runs each NF as a separate container with WebUI for browser-based subscriber management.
+**Full** includes everything for complete 5G SA testing including non-3GPP access (N3IWF, TNGF), charging (CHF), and network exposure (NEF).
 
 ### Manual Setup
 
@@ -107,11 +107,11 @@ These are the **minimum containers needed** to run a functional 5G SA core netwo
 
 **Minimum viable command:**
 ```bash
-# Minimal mode: 11 containers = working 5G core with slicing, policy, and UERANSIM
+# Minimal mode: 4 containers = all-in-one CP + UPF + MongoDB + UERANSIM
 ./setup-free5gc.sh install minimal
 
-# Or start only the 8 mandatory containers manually:
-# docker compose up -d db free5gc-nrf free5gc-amf free5gc-ausf free5gc-udm free5gc-udr free5gc-smf free5gc-upf
+# The all-in-one CP container (free5gc-cp) runs all 8 mandatory + recommended NFs
+# in a single process, using docker-compose-consolidated.yaml
 ```
 
 ### Recommended - Important but Survivable Without
@@ -140,24 +140,32 @@ These are **not 3GPP core network functions**. They are tools, simulators, or sp
 ### Visual: What to Run for Each Use Case
 
 ```
-INSTALL MODE: minimal (11 containers) - ./setup-free5gc.sh install minimal
+INSTALL MODE: minimal (4 containers) - ./setup-free5gc.sh install minimal  [DEFAULT]
+┌──────────────────────────────────────────────┐
+│  mongodb                                     │  Database
+│  free5gc-cp (NRF+AMF+AUSF+UDM+UDR+          │  All 8 NFs in 1 container
+│              SMF+NSSF+PCF)                   │
+│  upf                                         │  User plane (needs GTP5G)
+│  ueransim                                    │  gNB + UE simulator
+└──────────────────────────────────────────────┘
+  Fastest startup, lowest resources
+  No WebUI - subscriber provisioned via MongoDB
+
+INSTALL MODE: consolidated (12 containers) - ./setup-free5gc.sh install consolidated
 ┌──────────────────────────────────────────────┐
 │  mongodb → udr → udm → ausf                 │  Authentication chain
 │  nrf                                         │  Service discovery
 │  amf ← smf → upf                            │  Registration + Data
 │  nssf, pcf                                   │  Slice selection + Policy
+│  webui                                       │  Browser-based management
 │  ueransim                                    │  gNB + UE simulator
 └──────────────────────────────────────────────┘
-  No WebUI - subscriber provisioned via MongoDB
-
-INSTALL MODE: consolidated (12 containers) - ./setup-free5gc.sh install consolidated
-  = minimal + webui (browser-based subscriber management)
 
 INSTALL MODE: full (16 containers) - ./setup-free5gc.sh install full
   = consolidated + chf, n3iwf, tngf, nef, n3iwue
 
 PRODUCTION: Real gNB (no UERANSIM)
-  Use consolidated mode, remove ueransim, connect real gNB via N2/N3
+  Use minimal or consolidated mode, remove ueransim, connect real gNB via N2/N3
 ```
 
 ---
@@ -958,7 +966,7 @@ UERANSIM starts with internal sequence number (SQN) = 0. The default subscriber 
 
 - Ubuntu 22.04 LTS (Kernel 5.15.x or 6.8.x HWE)
 - CPU with AVX support (for MongoDB 4.4+)
-- 4 GB RAM minimum, 8 GB recommended (minimal mode works with 2 GB)
+- 4 GB RAM minimum, 8 GB recommended (minimal mode works with 2 GB - only 4 containers)
 - Root access
 - Docker is installed automatically by the script
 - GTP5G kernel module is built inside Docker (avoids Secure Boot and compiler issues)
