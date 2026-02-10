@@ -1050,9 +1050,8 @@ cmd_test_full() {
         log_fail "Only $unique_pdu_ues/$ATTACH_COUNT UEs got PDU sessions"
     fi
 
-    # Per-UE summary table (use AMF logs which contain per-UE SUPI)
-    local amf_new_logs
-    amf_new_logs=$(docker exec free5gc-cp tail -n "+$((LOG_POS_amf + 1))" /var/log/free5gc/amf.log 2>/dev/null || true)
+    # Per-UE summary table (use collected AMF logs which contain per-UE SUPI)
+    local amf_phase1_log="$log_dir/phase1/amf.log"
 
     echo ""
     echo -e "${BOLD}  UE#   IMSI                          Status        PDU${NC}"
@@ -1064,10 +1063,10 @@ cmd_test_full() {
         local status="${RED}NO_ATTEMPT${NC}"
         local pdu="-"
         # AMF logs contain [supi:SUPI:imsi-...] per UE
-        if echo "$amf_new_logs" | grep -q "supi:SUPI:${imsi}" 2>/dev/null; then
-            if echo "$amf_new_logs" | grep "supi:SUPI:${imsi}" | grep -q "Handle InitialRegistration\|ContextSetup" 2>/dev/null; then
+        if grep -q "supi:SUPI:${imsi}" "$amf_phase1_log" 2>/dev/null; then
+            if grep "supi:SUPI:${imsi}" "$amf_phase1_log" | grep -q "Handle InitialRegistration\|ContextSetup" 2>/dev/null; then
                 status="${GREEN}REGISTERED${NC}"
-                if echo "$amf_new_logs" | grep "supi:SUPI:${imsi}" | grep -q "create smContext" 2>/dev/null; then
+                if grep "supi:SUPI:${imsi}" "$amf_phase1_log" | grep -q "create smContext" 2>/dev/null; then
                     pdu="${GREEN}YES${NC}"
                 else
                     pdu="${YELLOW}NO${NC}"
