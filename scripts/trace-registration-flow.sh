@@ -64,11 +64,11 @@ log "  CP: running | UERANSIM: running | UPF: $UPF_RUNNING | MongoDB: running"
 # ── Step 2: Record log positions (before registration) ────────
 log "Step 2/7: Recording log positions..."
 
-declare -A LOG_LINES_BEFORE
-for nf in "${NFS[@]}"; do
+# Store per-NF line counts in individual variables (bash 3.2 compatible)
+for nf in ${NFS[@]}; do
     LOG_FILE="/var/log/free5gc/${nf}.log"
     LINES=$(docker exec free5gc-cp wc -l "$LOG_FILE" 2>/dev/null | awk '{print $1}' || echo "0")
-    LOG_LINES_BEFORE[$nf]=$LINES
+    eval "LOG_BEFORE_${nf}=${LINES}"
 done
 
 if [ "$UPF_RUNNING" = true ]; then
@@ -79,7 +79,7 @@ fi
 
 UERANSIM_LOG_LINES=$(docker logs ueransim 2>&1 | wc -l || echo "0")
 
-log "  Log positions recorded for ${#NFS[@]} NFs + UPF + UERANSIM"
+log "  Log positions recorded for 8 NFs + UPF + UERANSIM"
 
 # ── Step 3: Trigger UE registration ──────────────────────────
 if [ "$SKIP_UE" = false ]; then
@@ -126,9 +126,9 @@ fi
 log "Step 5/7: Collecting logs from all NFs..."
 
 # Collect CP NF logs (only new lines since step 2)
-for nf in "${NFS[@]}"; do
+for nf in ${NFS[@]}; do
     LOG_FILE="/var/log/free5gc/${nf}.log"
-    START_LINE=$((${LOG_LINES_BEFORE[$nf]} + 1))
+    eval "START_LINE=\$((LOG_BEFORE_${nf} + 1))"
     docker exec free5gc-cp tail -n "+${START_LINE}" "$LOG_FILE" 2>/dev/null > "$RAW_DIR/${nf}.log" || true
     LINE_COUNT=$(wc -l < "$RAW_DIR/${nf}.log" | tr -d ' ')
     log "  $nf: $LINE_COUNT new log lines"

@@ -12,7 +12,9 @@
 # ============================================================
 
 # ── Stage 1: Build all free5GC NFs from source ────────────────
-FROM golang:1.21-bookworm AS free5gc-builder
+FROM golang:latest AS free5gc-builder
+
+ENV GOTOOLCHAIN=auto
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     git gcc g++ cmake autoconf libtool pkg-config \
@@ -29,17 +31,17 @@ RUN git clone --recursive -b v4.2.0 --depth 1 https://github.com/free5gc/free5gc
 
 WORKDIR /src/free5gc
 
-# Build all control plane NFs
-RUN cd NFs && \
+# Build all control plane NFs (using subshells to avoid cd issues)
+RUN mkdir -p /output/cp && \
     for nf in nrf amf ausf udm udr smf nssf pcf; do \
         echo "=== Building $nf ===" && \
-        cd $nf && go build -o /output/cp/$nf -trimpath ./cmd && cd .. ; \
+        (cd NFs/$nf && go build -o /output/cp/$nf -trimpath ./cmd) ; \
     done
 
 # Build go-upf (user plane function)
-RUN cd NFs/upf && \
-    go build -o /output/upf/upf -trimpath ./cmd && \
-    cp -r internal/forwarder/gtp5g/cmd/gogtp5g-tunnel /tmp/gogtp5g-tunnel-src || true
+RUN mkdir -p /output/upf && \
+    (cd NFs/upf && go build -o /output/upf/upf -trimpath ./cmd) && \
+    cp -r NFs/upf/internal/forwarder/gtp5g/cmd/gogtp5g-tunnel /tmp/gogtp5g-tunnel-src || true
 
 # Build gtp5g-tunnel utility if available
 RUN if [ -d "/tmp/gogtp5g-tunnel-src" ]; then \
@@ -51,21 +53,25 @@ RUN printf '#!/bin/bash\niptables -t nat -A POSTROUTING -o eth0 -j MASQUERADE\ni
     > /output/upf/upf-iptables.sh && chmod +x /output/upf/upf-iptables.sh
 
 # ── Stage 2: Build UERANSIM from source ───────────────────────
-FROM gcc:14.3.0 AS ueransim-builder
+FROM ubuntu:22.04 AS ueransim-builder
 
 ENV DEBIAN_FRONTEND=noninteractive
-ENV PATH="$PATH:/cmake/bin"
-
-ARG TARGET_ARCH=x86_64
 
 RUN apt-get update && \
-    apt-get install -y libsctp-dev lksctp-tools iproute2 make && \
+    apt-get install -y --no-install-recommends \
+    git build-essential gcc g++ libsctp-dev lksctp-tools iproute2 make wget ca-certificates && \
+    rm -rf /var/lib/apt/lists/*
+
+# Install CMake with auto-detected architecture
+RUN ARCH=$(uname -m) && \
     mkdir /cmake && cd /cmake && \
-    wget -q https://github.com/Kitware/CMake/releases/download/v4.1.2/cmake-4.1.2-linux-${TARGET_ARCH}.sh -O cmake_installer.sh && \
+    wget -q "https://github.com/Kitware/CMake/releases/download/v3.28.3/cmake-3.28.3-linux-${ARCH}.sh" -O cmake_installer.sh && \
     chmod +x cmake_installer.sh && \
-    ./cmake_installer.sh --skip-license && \
-    cd .. && \
-    git clone -b master -j $(nproc) https://github.com/aligungr/UERANSIM && \
+    ./cmake_installer.sh --skip-license --prefix=/usr/local && \
+    rm cmake_installer.sh
+
+# Clone and build UERANSIM
+RUN git clone -b master -j $(nproc) https://github.com/aligungr/UERANSIM && \
     cd UERANSIM && \
     make -j $(nproc)
 

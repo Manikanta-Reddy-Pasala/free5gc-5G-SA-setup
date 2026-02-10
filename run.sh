@@ -83,121 +83,24 @@ if [ $WAITED -ge $MAX_WAIT ]; then
 fi
 
 # ── Step 3: Provision default subscriber ──────────────────────
-log "Step 3/4: Provisioning subscriber $IMSI via direct MongoDB insert..."
+log "Step 3/4: Provisioning subscriber via WebUI API..."
 
-# Wait for MongoDB to be ready
-for attempt in $(seq 1 15); do
-    if docker exec mongodb mongo --quiet --eval "db.runCommand({ping: 1})" >/dev/null 2>&1; then
-        break
-    fi
-    sleep 1
-done
+# Use the existing provision script which handles the correct data format
+DOCKER_NETWORK="free5gc-test_privnet"
+if ! docker network ls --format '{{.Name}}' | grep -q "$DOCKER_NETWORK"; then
+    # Try to detect the actual network name
+    DOCKER_NETWORK=$(docker network ls --format '{{.Name}}' | grep privnet | head -1)
+fi
 
-# Insert subscriber data directly into MongoDB (no WebUI needed)
-docker exec mongodb mongo mongodb://localhost:27017/free5gc --quiet --eval '
-// Clean existing subscriber data
-var imsi = "'"$IMSI"'";
-db["subscriptionData.authenticationData.authenticationSubscription"].deleteMany({ueId: imsi});
-db["subscriptionData.provisionedData.amData"].deleteMany({ueId: imsi});
-db["subscriptionData.provisionedData.smData"].deleteMany({ueId: imsi});
-db["subscriptionData.provisionedData.smfSelectionSubscriptionData"].deleteMany({ueId: imsi});
-db["policyData.ues.amData"].deleteMany({ueId: imsi});
-db["policyData.ues.smData"].deleteMany({ueId: imsi});
-
-// 1. Authentication Subscription
-db["subscriptionData.authenticationData.authenticationSubscription"].insertOne({
-    ueId: imsi,
-    authenticationMethod: "5G_AKA",
-    permanentKey: {permanentKeyValue: "'"$K"'", encryptionKey: 0, encryptionAlgorithm: 0},
-    sequenceNumber: "000000000020",
-    authenticationManagementField: "8000",
-    milenage: {op: {opValue: "", encryptionKey: 0, encryptionAlgorithm: 0}},
-    opc: {opcValue: "'"$OPC"'", encryptionKey: 0, encryptionAlgorithm: 0}
-});
-
-// 2. Access and Mobility Subscription Data
-db["subscriptionData.provisionedData.amData"].insertOne({
-    ueId: imsi,
-    servingPlmnId: "'"$PLMN"'",
-    gpsis: ["msisdn-0900000000"],
-    subscribedUeAmbr: {downlink: "2 Gbps", uplink: "1 Gbps"},
-    nssai: {
-        defaultSingleNssais: [
-            {sst: 1, sd: "010203"},
-            {sst: 1, sd: "112233"}
-        ]
+if [ -f "./scripts/provision-subscriber.sh" ]; then
+    ./scripts/provision-subscriber.sh "$IMSI" "$PLMN" "$DOCKER_NETWORK" || {
+        log "WARNING: WebUI provisioning failed. Subscriber may need manual setup."
     }
-});
+else
+    log "WARNING: provision-subscriber.sh not found. Skipping subscriber provisioning."
+fi
 
-// 3. Session Management Subscription Data (slice 1)
-db["subscriptionData.provisionedData.smData"].insertOne({
-    ueId: imsi,
-    servingPlmnId: "'"$PLMN"'",
-    singleNssai: {sst: 1, sd: "010203"},
-    dnnConfigurations: {
-        internet: {
-            pduSessionTypes: {defaultSessionType: "IPV4", allowedSessionTypes: ["IPV4"]},
-            sscModes: {defaultSscMode: "SSC_MODE_1"},
-            "5gQosProfile": {"5qi": 9, arp: {priorityLevel: 8, preemptCap: "", preemptVuln: ""}},
-            sessionAmbr: {downlink: "200 Mbps", uplink: "100 Mbps"}
-        }
-    }
-});
-
-// 4. Session Management Subscription Data (slice 2)
-db["subscriptionData.provisionedData.smData"].insertOne({
-    ueId: imsi,
-    servingPlmnId: "'"$PLMN"'",
-    singleNssai: {sst: 1, sd: "112233"},
-    dnnConfigurations: {
-        internet: {
-            pduSessionTypes: {defaultSessionType: "IPV4", allowedSessionTypes: ["IPV4"]},
-            sscModes: {defaultSscMode: "SSC_MODE_1"},
-            "5gQosProfile": {"5qi": 9, arp: {priorityLevel: 8, preemptCap: "", preemptVuln: ""}},
-            sessionAmbr: {downlink: "200 Mbps", uplink: "100 Mbps"}
-        }
-    }
-});
-
-// 5. SMF Selection Subscription Data
-db["subscriptionData.provisionedData.smfSelectionSubscriptionData"].insertOne({
-    ueId: imsi,
-    servingPlmnId: "'"$PLMN"'",
-    subscribedSnssaiInfos: {
-        "01010203": {dnnInfos: [{dnn: "internet"}]},
-        "01112233": {dnnInfos: [{dnn: "internet"}]}
-    }
-});
-
-// 6. AM Policy Data
-db["policyData.ues.amData"].insertOne({
-    ueId: imsi,
-    subscCats: ["free5gc"]
-});
-
-// 7. SM Policy Data (with smPolicySnssaiData to prevent PCF nil panic)
-db["policyData.ues.smData"].insertOne({
-    ueId: imsi,
-    smPolicySnssaiData: {
-        "01010203": {
-            snssai: {sst: 1, sd: "010203"},
-            smPolicyDnnData: {
-                internet: {dnn: "internet"}
-            }
-        },
-        "01112233": {
-            snssai: {sst: 1, sd: "112233"},
-            smPolicyDnnData: {
-                internet: {dnn: "internet"}
-            }
-        }
-    }
-});
-
-print("SUCCESS: Subscriber " + imsi + " provisioned with all required collections");
-' 2>&1
-
-log "Subscriber provisioned."
+log "Subscriber provisioning complete."
 
 # ── Step 4: Show status ──────────────────────────────────────
 log "Step 4/4: Deployment status"

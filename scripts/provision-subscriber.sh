@@ -24,8 +24,14 @@ set -euo pipefail
 IMSI="${1:-imsi-208930000000001}"
 PLMN="${2:-20893}"
 DOCKER_NETWORK="${3:-free5gc-5g-sa-setup_privnet}"
-WEBUI_PORT=5000
 WEBUI_IMAGE="free5gc/webui:v4.2.0"
+
+# Auto-detect port: use 5001 on macOS (port 5000 is used by AirPlay)
+if [ "$(uname)" = "Darwin" ]; then
+    WEBUI_PORT=5001
+else
+    WEBUI_PORT=5000
+fi
 
 # Default 5G-AKA credentials (matches free5GC test defaults)
 K="8baf473f2f8fd09487cccbd7097c6862"
