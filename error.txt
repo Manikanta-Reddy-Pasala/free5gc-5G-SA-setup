@@ -1,0 +1,78 @@
+root@manikanta-NUC12WSH-B:~/free5gc-5G-SA-setup# chmod +x setup-free5gc.sh
+./setup-free5gc.sh install
+[INFO] Installing Docker Engine and Docker Compose...
+[INFO] Docker already installed: Docker version 29.2.1, build a5c7197
+[INFO] Installing GTP5G kernel module...
+make -C /lib/modules/6.8.0-40-generic/build M=/root/gtp5g clean
+make[1]: Entering directory '/usr/src/linux-headers-6.8.0-40-generic'
+  CLEAN   /root/gtp5g/Module.symvers
+make[1]: Leaving directory '/usr/src/linux-headers-6.8.0-40-generic'
+make -C /lib/modules/6.8.0-40-generic/build M=/root/gtp5g modules
+make[1]: Entering directory '/usr/src/linux-headers-6.8.0-40-generic'
+warning: the compiler differs from the one used to build the kernel
+  The kernel was built by: x86_64-linux-gnu-gcc-12 (Ubuntu 12.3.0-1ubuntu1~22.04) 12.3.0
+  You are using:           gcc-12 (Ubuntu 12.3.0-1ubuntu1~22.04.2) 12.3.0
+  CC [M]  /root/gtp5g/src/gtp5g.o
+  CC [M]  /root/gtp5g/src/log.o
+  CC [M]  /root/gtp5g/src/util.o
+  CC [M]  /root/gtp5g/src/gtpu/dev.o
+  CC [M]  /root/gtp5g/src/gtpu/encap.o
+/root/gtp5g/src/gtpu/encap.c:568:6: warning: no previous prototype for ‘update_counter’ [-Wmissing-prototypes]
+  568 | void update_counter(struct VolumeMeasurement *volmeasure, u64 vol, bool uplink, bool mnop){
+      |      ^~~~~~~~~~~~~~
+/root/gtp5g/src/gtpu/encap.c:595:6: warning: no previous prototype for ‘check_counter’ [-Wmissing-prototypes]
+  595 | bool check_counter(struct VolumeMeasurement *volmeasure, struct Volume *volume){
+      |      ^~~~~~~~~~~~~
+/root/gtp5g/src/gtpu/encap.c:637:5: warning: no previous prototype for ‘update_urr_counter_and_send_report’ [-Wmissing-prototypes]
+  637 | int update_urr_counter_and_send_report(struct pdr *pdr, struct far *far, u64 vol, u64 vol_mbqe) {
+      |     ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+  CC [M]  /root/gtp5g/src/gtpu/hash.o
+  CC [M]  /root/gtp5g/src/gtpu/link.o
+  CC [M]  /root/gtp5g/src/gtpu/net.o
+  CC [M]  /root/gtp5g/src/gtpu/pktinfo.o
+/root/gtp5g/src/gtpu/pktinfo.c:16:5: warning: no previous prototype for ‘network_and_transport_header_len’ [-Wmissing-prototypes]
+   16 | u64 network_and_transport_header_len(struct sk_buff *skb) {
+      |     ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/root/gtp5g/src/gtpu/pktinfo.c:129:16: warning: no previous prototype for ‘ip4_find_route_simple’ [-Wmissing-prototypes]
+  129 | struct rtable *ip4_find_route_simple(struct sk_buff *skb,
+      |                ^~~~~~~~~~~~~~~~~~~~~
+  CC [M]  /root/gtp5g/src/gtpu/trTCM.o
+  CC [M]  /root/gtp5g/src/genl/genl.o
+  CC [M]  /root/gtp5g/src/genl/genl_version.o
+  CC [M]  /root/gtp5g/src/genl/genl_pdr.o
+  CC [M]  /root/gtp5g/src/genl/genl_far.o
+  CC [M]  /root/gtp5g/src/genl/genl_qer.o
+/root/gtp5g/src/genl/genl_qer.c:297:5: warning: no previous prototype for ‘concat_bit_rate’ [-Wmissing-prototypes]
+  297 | u64 concat_bit_rate(u32 highbit, u8 lowbit) {
+      |     ^~~~~~~~~~~~~~~
+  CC [M]  /root/gtp5g/src/genl/genl_urr.o
+  CC [M]  /root/gtp5g/src/genl/genl_report.o
+  CC [M]  /root/gtp5g/src/genl/genl_bar.o
+  CC [M]  /root/gtp5g/src/pfcp/api_version.o
+  CC [M]  /root/gtp5g/src/pfcp/pdr.o
+/root/gtp5g/src/pfcp/pdr.c:261:6: warning: no previous prototype for ‘ip_match’ [-Wmissing-prototypes]
+  261 | bool ip_match(struct iphdr *iph, struct pdr *pdr)
+      |      ^~~~~~~~
+  CC [M]  /root/gtp5g/src/pfcp/far.o
+  CC [M]  /root/gtp5g/src/pfcp/qer.o
+  CC [M]  /root/gtp5g/src/pfcp/urr.o
+/root/gtp5g/src/pfcp/urr.c:12:6: warning: no previous prototype for ‘seid_urr_id_to_hex_str’ [-Wmissing-prototypes]
+   12 | void seid_urr_id_to_hex_str(u64 seid_int, u32 urr_id, char *buff)
+      |      ^~~~~~~~~~~~~~~~~~~~~~
+  CC [M]  /root/gtp5g/src/pfcp/bar.o
+  CC [M]  /root/gtp5g/src/pfcp/seid.o
+  CC [M]  /root/gtp5g/src/proc.o
+  LD [M]  /root/gtp5g/gtp5g.o
+  MODPOST /root/gtp5g/Module.symvers
+  CC [M]  /root/gtp5g/gtp5g.mod.o
+  LD [M]  /root/gtp5g/gtp5g.ko
+  BTF [M] /root/gtp5g/gtp5g.ko
+Skipping BTF generation for /root/gtp5g/gtp5g.ko due to unavailability of vmlinux
+make[1]: Leaving directory '/usr/src/linux-headers-6.8.0-40-generic'
+cp gtp5g.ko /lib/modules/6.8.0-40-generic/kernel/drivers/net
+modprobe udp_tunnel
+/sbin/depmod -a
+modprobe gtp5g
+echo "udp_tunnel" > /etc/modules-load.d/gtp5g.conf
+echo "gtp5g" >> /etc/modules-load.d/gtp5g.conf
+[ERROR] Failed to load GTP5G kernel module
