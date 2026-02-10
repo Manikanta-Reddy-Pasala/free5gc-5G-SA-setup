@@ -1,78 +1,44 @@
-root@manikanta-NUC12WSH-B:~/free5gc-5G-SA-setup# chmod +x setup-free5gc.sh
-./setup-free5gc.sh install
+
+
+
+error:
+
+root@manikanta-NUC12WSH-B:~/free5gc-5G-SA-setup# ./setup-free5gc.sh install
+
+Select installation mode:
+
+  1) minimal       - 4 containers: all-in-one CP + UPF + DB + UERANSIM (default)
+  2) consolidated  - 12 containers: individual NFs + WebUI + UERANSIM
+  3) full          - 16 containers: everything including N3IWF, TNGF, NEF, CHF
+
+Enter choice [1/2/3] (default: 1): 1
+
+============================================
+ Install Mode: minimal
+============================================
+ All-in-one CP + UPF + MongoDB + UERANSIM (4 containers)
+ 8 NFs merged into 1 container (free5gc-cp)
+ Fastest startup, lowest resource usage
+============================================
+
 [INFO] Installing Docker Engine and Docker Compose...
 [INFO] Docker already installed: Docker version 29.2.1, build a5c7197
 [INFO] Installing GTP5G kernel module...
-make -C /lib/modules/6.8.0-40-generic/build M=/root/gtp5g clean
-make[1]: Entering directory '/usr/src/linux-headers-6.8.0-40-generic'
-  CLEAN   /root/gtp5g/Module.symvers
-make[1]: Leaving directory '/usr/src/linux-headers-6.8.0-40-generic'
-make -C /lib/modules/6.8.0-40-generic/build M=/root/gtp5g modules
-make[1]: Entering directory '/usr/src/linux-headers-6.8.0-40-generic'
-warning: the compiler differs from the one used to build the kernel
-  The kernel was built by: x86_64-linux-gnu-gcc-12 (Ubuntu 12.3.0-1ubuntu1~22.04) 12.3.0
-  You are using:           gcc-12 (Ubuntu 12.3.0-1ubuntu1~22.04.2) 12.3.0
-  CC [M]  /root/gtp5g/src/gtp5g.o
-  CC [M]  /root/gtp5g/src/log.o
-  CC [M]  /root/gtp5g/src/util.o
-  CC [M]  /root/gtp5g/src/gtpu/dev.o
-  CC [M]  /root/gtp5g/src/gtpu/encap.o
-/root/gtp5g/src/gtpu/encap.c:568:6: warning: no previous prototype for ‘update_counter’ [-Wmissing-prototypes]
-  568 | void update_counter(struct VolumeMeasurement *volmeasure, u64 vol, bool uplink, bool mnop){
-      |      ^~~~~~~~~~~~~~
-/root/gtp5g/src/gtpu/encap.c:595:6: warning: no previous prototype for ‘check_counter’ [-Wmissing-prototypes]
-  595 | bool check_counter(struct VolumeMeasurement *volmeasure, struct Volume *volume){
-      |      ^~~~~~~~~~~~~
-/root/gtp5g/src/gtpu/encap.c:637:5: warning: no previous prototype for ‘update_urr_counter_and_send_report’ [-Wmissing-prototypes]
-  637 | int update_urr_counter_and_send_report(struct pdr *pdr, struct far *far, u64 vol, u64 vol_mbqe) {
-      |     ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-  CC [M]  /root/gtp5g/src/gtpu/hash.o
-  CC [M]  /root/gtp5g/src/gtpu/link.o
-  CC [M]  /root/gtp5g/src/gtpu/net.o
-  CC [M]  /root/gtp5g/src/gtpu/pktinfo.o
-/root/gtp5g/src/gtpu/pktinfo.c:16:5: warning: no previous prototype for ‘network_and_transport_header_len’ [-Wmissing-prototypes]
-   16 | u64 network_and_transport_header_len(struct sk_buff *skb) {
-      |     ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-/root/gtp5g/src/gtpu/pktinfo.c:129:16: warning: no previous prototype for ‘ip4_find_route_simple’ [-Wmissing-prototypes]
-  129 | struct rtable *ip4_find_route_simple(struct sk_buff *skb,
-      |                ^~~~~~~~~~~~~~~~~~~~~
-  CC [M]  /root/gtp5g/src/gtpu/trTCM.o
-  CC [M]  /root/gtp5g/src/genl/genl.o
-  CC [M]  /root/gtp5g/src/genl/genl_version.o
-  CC [M]  /root/gtp5g/src/genl/genl_pdr.o
-  CC [M]  /root/gtp5g/src/genl/genl_far.o
-  CC [M]  /root/gtp5g/src/genl/genl_qer.o
-/root/gtp5g/src/genl/genl_qer.c:297:5: warning: no previous prototype for ‘concat_bit_rate’ [-Wmissing-prototypes]
-  297 | u64 concat_bit_rate(u32 highbit, u8 lowbit) {
-      |     ^~~~~~~~~~~~~~~
-  CC [M]  /root/gtp5g/src/genl/genl_urr.o
-  CC [M]  /root/gtp5g/src/genl/genl_report.o
-  CC [M]  /root/gtp5g/src/genl/genl_bar.o
-  CC [M]  /root/gtp5g/src/pfcp/api_version.o
-  CC [M]  /root/gtp5g/src/pfcp/pdr.o
-/root/gtp5g/src/pfcp/pdr.c:261:6: warning: no previous prototype for ‘ip_match’ [-Wmissing-prototypes]
-  261 | bool ip_match(struct iphdr *iph, struct pdr *pdr)
-      |      ^~~~~~~~
-  CC [M]  /root/gtp5g/src/pfcp/far.o
-  CC [M]  /root/gtp5g/src/pfcp/qer.o
-  CC [M]  /root/gtp5g/src/pfcp/urr.o
-/root/gtp5g/src/pfcp/urr.c:12:6: warning: no previous prototype for ‘seid_urr_id_to_hex_str’ [-Wmissing-prototypes]
-   12 | void seid_urr_id_to_hex_str(u64 seid_int, u32 urr_id, char *buff)
-      |      ^~~~~~~~~~~~~~~~~~~~~~
-  CC [M]  /root/gtp5g/src/pfcp/bar.o
-  CC [M]  /root/gtp5g/src/pfcp/seid.o
-  CC [M]  /root/gtp5g/src/proc.o
-  LD [M]  /root/gtp5g/gtp5g.o
-  MODPOST /root/gtp5g/Module.symvers
-  CC [M]  /root/gtp5g/gtp5g.mod.o
-  LD [M]  /root/gtp5g/gtp5g.ko
-  BTF [M] /root/gtp5g/gtp5g.ko
-Skipping BTF generation for /root/gtp5g/gtp5g.ko due to unavailability of vmlinux
-make[1]: Leaving directory '/usr/src/linux-headers-6.8.0-40-generic'
-cp gtp5g.ko /lib/modules/6.8.0-40-generic/kernel/drivers/net
-modprobe udp_tunnel
-/sbin/depmod -a
-modprobe gtp5g
-echo "udp_tunnel" > /etc/modules-load.d/gtp5g.conf
-echo "gtp5g" >> /etc/modules-load.d/gtp5g.conf
-[ERROR] Failed to load GTP5G kernel module
+[INFO] Building GTP5G kernel module in Docker for kernel 6.8.0-40-generic...
+[+] Building 2.1s (8/8) FINISHED                                                                                                                                                                                                                                                                                                                                                                                          docker:default
+ => [internal] load build definition from Dockerfile                                                                                                                                                                                                                                                                                                                                                                                0.0s
+ => => transferring dockerfile: 615B                                                                                                                                                                                                                                                                                                                                                                                                0.0s
+ => [internal] load metadata for docker.io/library/ubuntu:22.04                                                                                                                                                                                                                                                                                                                                                                     1.6s
+ => [internal] load .dockerignore                                                                                                                                                                                                                                                                                                                                                                                                   0.0s
+ => => transferring context: 2B                                                                                                                                                                                                                                                                                                                                                                                                     0.0s
+ => [1/5] FROM docker.io/library/ubuntu:22.04@sha256:c7eb020043d8fc2ae0793fb35a37bff1cf33f156d4d4b12ccc7f3ef8706c38b1                                                                                                                                                                                                                                                                                                               0.0s
+ => => resolve docker.io/library/ubuntu:22.04@sha256:c7eb020043d8fc2ae0793fb35a37bff1cf33f156d4d4b12ccc7f3ef8706c38b1                                                                                                                                                                                                                                                                                                               0.0s
+ => CACHED [2/5] RUN apt-get update && apt-get install -y --no-install-recommends     linux-headers-6.8.0-40-generic build-essential make gcc git ca-certificates     && rm -rf /var/lib/apt/lists/*                                                                                                                                                                                                                                0.0s
+ => CACHED [3/5] RUN git clone https://github.com/free5gc/gtp5g.git /gtp5g                                                                                                                                                                                                                                                                                                                                                          0.0s
+ => CACHED [4/5] WORKDIR /gtp5g                                                                                                                                                                                                                                                                                                                                                                                                     0.0s
+ => ERROR [5/5] RUN LATEST_TAG=$(git tag --sort=-version:refname | head -1) &&     if [ -n "$LATEST_TAG" ]; then         echo "Building gtp5g $LATEST_TAG" &&         git checkout "$LATEST_TAG";     fi &&     make KVER=6.8.0-40-generic &&     echo "Build successful: $(ls -la gtp5g.ko)"
+
+
+ssh pub:
+
+ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAACAQC8OxDozzvyC9oLpzT4ClLy0GtIm00pJRqZl+aUlEWKkLW3LOcXrc9FIXSpt8LiZvUBvhHOO8+95NLA/uST4OCgZti8rMoWd2BnHiIHxDynJ+4lq0D2KMVAkxjcAXpGfM3ZIYImP6H3p7qPEeoQdpq6Pps6xNmMIuq5XKW/twKrXEdvYKzQsxjMmbaUr5/X8yvmcD4j764E1lbn6V4HR2oqExkD81hhB10lDqUnZB4xFvThn5y734KEAKLg7Hq/CSKzIVI7oYrobESuuVsR4C59H387wkso0x4WvDR1L+eJfj9siZUxJiUIngMpyFh/zd6Ofq3xOzUEQSJNIiKe4KahMVghUBGbYOlZTezZ3egJRi2bcdvtuYFLy+afow1bRHAmKTZtsT5bYahLGHq53IGjdFjNc6zI9zxflAhPGrLLJrBfwdX41oAqpoeDJCbD0bihOeGzUurpt7MDgD53lBEoY+vNn9euLSAhSa2YLvdfdghJqujjgwBKsg3X5t87vsvWLbzqIb4T40wIEo8NxYSLNfWJ6813evu9xfZJJ3qczdWFAK6Nli/zU8HTSWQOEIX2Fw0V58fy1b3YoYfyxuLCuMO82oWudOVNT4qiYO3liIlkRBoMny4Of8XeeX36I0QycX2rDAgDtkDw+9iSIFnzVrnpZxJms78L0MU1C/nh5w== root@manikanta-NUC12WSH-B
