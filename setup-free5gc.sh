@@ -63,62 +63,77 @@ install_gtp5g() {
         return 0
     fi
 
-    apt-get install -y -qq linux-headers-$(uname -r) build-essential make gcc git
+    local KVER
+    KVER=$(uname -r)
+    local GTP5G_BUILD_DIR="/root/gtp5g-build"
+    local GTP5G_KO="$GTP5G_BUILD_DIR/gtp5g.ko"
 
-    cd /root
-    if [ -d "gtp5g" ]; then
-        log_info "Updating existing gtp5g source..."
-        cd gtp5g
-        git fetch --tags
-        local latest_tag
-        latest_tag=$(git tag --sort=-version:refname | head -1)
-        if [ -n "$latest_tag" ]; then
-            log_info "Checking out latest release: $latest_tag"
-            git checkout "$latest_tag"
-        else
-            git pull origin main || git pull origin master || true
-        fi
-    else
-        git clone https://github.com/free5gc/gtp5g.git
-        cd gtp5g
-        local latest_tag
-        latest_tag=$(git tag --sort=-version:refname | head -1)
-        if [ -n "$latest_tag" ]; then
-            log_info "Checking out latest release: $latest_tag"
-            git checkout "$latest_tag"
-        fi
+    mkdir -p "$GTP5G_BUILD_DIR"
+
+    log_info "Building GTP5G kernel module in Docker for kernel $KVER..."
+
+    # Build gtp5g.ko inside a Docker container with matching kernel headers
+    docker build -t gtp5g-builder -f - "$GTP5G_BUILD_DIR" <<DOCKERFILE
+FROM ubuntu:$(lsb_release -rs)
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    linux-headers-$KVER build-essential make gcc git ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+RUN git clone https://github.com/free5gc/gtp5g.git /gtp5g
+WORKDIR /gtp5g
+RUN LATEST_TAG=\$(git tag --sort=-version:refname | head -1) && \
+    if [ -n "\$LATEST_TAG" ]; then \
+        echo "Building gtp5g \$LATEST_TAG" && \
+        git checkout "\$LATEST_TAG"; \
+    fi && \
+    make KVER=$KVER && \
+    echo "Build successful: \$(ls -la gtp5g.ko)"
+DOCKERFILE
+
+    # Copy the built .ko from the container to host
+    local container_id
+    container_id=$(docker create gtp5g-builder)
+    docker cp "$container_id:/gtp5g/gtp5g.ko" "$GTP5G_KO"
+    docker rm "$container_id" > /dev/null
+    docker rmi gtp5g-builder > /dev/null 2>&1 || true
+
+    if [ ! -f "$GTP5G_KO" ]; then
+        log_error "Failed to build gtp5g.ko in Docker"
+        exit 1
     fi
 
-    log_info "Building GTP5G for kernel $(uname -r)..."
-    make clean || true
-    make
-    make install
+    log_info "GTP5G module built successfully, installing on host..."
+
+    # Install the .ko to the kernel modules directory
+    local ko_dest="/lib/modules/$KVER/kernel/drivers/net"
+    mkdir -p "$ko_dest"
+    cp "$GTP5G_KO" "$ko_dest/gtp5g.ko"
+
+    # Update module dependencies
+    depmod -a "$KVER"
 
     # Load udp_tunnel dependency first
     modprobe udp_tunnel 2>/dev/null || true
 
-    # Try modprobe first, fall back to insmod if it fails
+    # Try modprobe first, fall back to insmod
     if ! modprobe gtp5g 2>/dev/null; then
         log_warn "modprobe failed, trying insmod..."
-        local ko_path="/lib/modules/$(uname -r)/kernel/drivers/net/gtp5g.ko"
-        if [ -f "$ko_path" ]; then
-            insmod "$ko_path" 2>&1 || true
-        elif [ -f "/root/gtp5g/gtp5g.ko" ]; then
-            insmod /root/gtp5g/gtp5g.ko 2>&1 || true
-        fi
+        insmod "$GTP5G_KO" 2>&1 || true
     fi
 
     sleep 1
 
     if lsmod | grep -q gtp5g; then
         log_info "GTP5G kernel module loaded successfully ($(modinfo -F version gtp5g 2>/dev/null || echo 'unknown version'))"
+        # Ensure module loads on boot
+        echo "udp_tunnel" > /etc/modules-load.d/gtp5g.conf
+        echo "gtp5g" >> /etc/modules-load.d/gtp5g.conf
     else
         log_error "Failed to load GTP5G kernel module"
-        log_error "Kernel: $(uname -r)"
+        log_error "Kernel: $KVER"
         log_warn "Checking dmesg for module loading errors..."
         dmesg | tail -20 | grep -i -E "gtp5g|module|signature|cert|verify" || true
         echo ""
-        # Check Secure Boot
         if command -v mokutil &>/dev/null; then
             local sb_state
             sb_state=$(mokutil --sb-state 2>/dev/null || echo "unknown")
