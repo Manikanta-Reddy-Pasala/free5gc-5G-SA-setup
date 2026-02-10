@@ -55,6 +55,20 @@ This handles everything: Docker, GTP5G kernel module (built via Docker for kerne
 **Consolidated** runs each NF as a separate container with WebUI for browser-based subscriber management.
 **Full** includes everything for complete 5G SA testing including non-3GPP access (N3IWF, TNGF), charging (CHF), and network exposure (NEF).
 
+### Build from Source (Mac / Linux / Any OS)
+
+Only needs Docker - no Go, GCC, or CMake on host. Works on Apple Silicon, Intel, ARM64, x86_64.
+
+```bash
+git clone https://github.com/Manikanta-Reddy-Pasala/free5gc-5G-SA-setup.git
+cd free5gc-5G-SA-setup
+./build.sh                    # Compile all NFs from source (~15 min first time)
+./run.sh --cp-only            # Start without UPF (Mac - no gtp5g needed)
+./run.sh                      # Start with UPF (Linux - full mode)
+```
+
+See the full guide: [docs/10-PORTABLE-BUILD-AND-TRACE.md](docs/10-PORTABLE-BUILD-AND-TRACE.md)
+
 ### Manual Setup
 
 Follow the step-by-step guide: [docs/02-SETUP-GUIDE.md](docs/02-SETUP-GUIDE.md)
@@ -83,6 +97,7 @@ Internet Access:  Ping 8.8.8.8 via uesimtun0 - 0% loss, ~4ms RTT
 | [Consolidated Deployment](docs/07-CONSOLIDATED-DEPLOYMENT.md) | 4-container deployment architecture | DevOps / Edge |
 | [Deployment Modes Guide](docs/08-DEPLOYMENT-MODES-GUIDE.md) | Full vs Mandatory vs Consolidated: comparison, deploy, and test | All levels |
 | [5G Procedures & NF Roles](docs/09-5G-PROCEDURES-AND-NF-ROLES.md) | Real-world 5G procedures: Attach, Auth, PDU Session, Paging, and more | Intermediate / Advanced |
+| [Portable Build & Trace](docs/10-PORTABLE-BUILD-AND-TRACE.md) | Build from source, run modes, UE simulation, data flow tracing | All levels |
 
 ---
 
@@ -987,251 +1002,6 @@ These values must match between `config/uecfg.yaml` and the subscriber database:
 ## Troubleshooting
 
 See [TROUBLESHOOTING.md](TROUBLESHOOTING.md) and [docs/02-SETUP-GUIDE.md#troubleshooting](docs/02-SETUP-GUIDE.md#troubleshooting) for common issues and fixes.
-
----
-
-## Portable Build System (Build from Source)
-
-This project includes a fully Docker-based build system that compiles **all free5GC NFs + UERANSIM from source** inside Docker. It works on **Mac (Apple Silicon/Intel), Linux, or any OS** with Docker installed - no Go, CMake, or build tools needed on the host.
-
-### Why Build from Source?
-
-- **Portable**: Works on Mac, Linux, ARM64, x86_64 - Docker handles all compilation
-- **Reproducible**: Exact same binaries every time, no dependency drift
-- **Debug-ready**: All configs set to `debug` logging level for tracing data flows
-- **Self-contained**: Only requires Docker - no Go, GCC, CMake, or other build tools on host
-- **Inspectable**: Built binaries are extracted to `build-output/` for easy examination
-
-### Architecture Overview
-
-```
-┌─────────────────────────────────────────────────────────────────┐
-│ Dockerfile.build-all (Multi-stage builder)                      │
-│                                                                 │
-│  Stage 1: golang:latest                                         │
-│    └─ Clone free5GC v4.2.0 → Build 8 CP NFs + UPF from source │
-│                                                                 │
-│  Stage 2: ubuntu:22.04                                          │
-│    └─ Clone UERANSIM → Build nr-gnb, nr-ue, nr-cli from source│
-│                                                                 │
-│  Stage 3: Export                                                │
-│    └─ Copy all binaries to /output → Volume mount to host      │
-└───────────────────────────┬─────────────────────────────────────┘
-                            │ docker run -v ./build-output:/export
-                            ▼
-┌─────────────────────────────────────────────────────────────────┐
-│ build-output/                                                   │
-│  ├── cp/    (nrf, amf, ausf, udm, udr, smf, nssf, pcf)       │
-│  ├── upf/   (upf, upf-iptables.sh)                            │
-│  └── ueransim/ (nr-gnb, nr-ue, nr-cli, binder/)              │
-└───────────────────────────┬─────────────────────────────────────┘
-                            │ docker compose build
-                            ▼
-┌─────────────────────────────────────────────────────────────────┐
-│ Runtime Images (lightweight, ~100-300MB each)                   │
-│  ├── free5gc-cp-local:v4.2.0      (Dockerfile.cp-local)       │
-│  ├── free5gc-upf-local:v4.2.0     (Dockerfile.upf-local)      │
-│  └── free5gc-ueransim-local:latest (Dockerfile.ueransim-local) │
-└───────────────────────────┬─────────────────────────────────────┘
-                            │ docker compose up -d
-                            ▼
-┌─────────────────────────────────────────────────────────────────┐
-│ 4 Running Containers (docker-compose-portable.yaml)             │
-│  ├── mongodb        (mongo:4.4)                                │
-│  ├── free5gc-cp     (8 NFs in 1: NRF+AMF+AUSF+UDM+UDR+SMF+..)│
-│  ├── upf            (User Plane - needs gtp5g kernel module)   │
-│  └── ueransim       (gNB simulator)                            │
-└─────────────────────────────────────────────────────────────────┘
-```
-
-### Step 1: Clone the Repo
-
-```bash
-git clone https://github.com/Manikanta-Reddy-Pasala/free5gc-5G-SA-setup.git
-cd free5gc-5G-SA-setup
-chmod +x build.sh run.sh scripts/*.sh
-```
-
-### Step 2: Build Everything from Source
-
-```bash
-./build.sh
-```
-
-This does 3 things:
-1. **Compiles all source code** inside Docker (~10-20 min first time, cached after)
-   - 8 Go binaries: NRF, AMF, AUSF, UDM, UDR, SMF, NSSF, PCF
-   - 1 Go binary: UPF (go-upf)
-   - 3 C++ binaries: nr-gnb, nr-ue, nr-cli (UERANSIM)
-2. **Extracts binaries** to `build-output/` via Docker volume mount
-3. **Builds 3 lightweight runtime images** from the extracted binaries
-
-After build completes, you'll see:
-```
-  free5gc-cp-local:v4.2.0      (~300MB)
-  free5gc-upf-local:v4.2.0     (~140MB)
-  free5gc-ueransim-local:latest (~115MB)
-```
-
-To skip the source compilation and just rebuild runtime images (if binaries already exist):
-```bash
-./build.sh --quick
-```
-
-### Step 3: Run the 5G Core
-
-**On Linux (with gtp5g kernel module - full mode):**
-```bash
-./run.sh
-```
-
-**On Mac or without gtp5g (CP-only mode):**
-```bash
-./run.sh --cp-only
-```
-
-`run.sh` automatically:
-1. Starts all containers (or just CP + DB + UERANSIM in `--cp-only` mode)
-2. Waits for the Control Plane health check (up to 120s)
-3. Provisions a default subscriber via the WebUI API (IMSI: `imsi-208930000000001`)
-4. Applies MongoDB patches for `allowedSessionTypes` and `smPolicySnssaiData`
-5. Shows container status
-
-**Other run.sh commands:**
-```bash
-./run.sh --down      # Stop and remove all containers + volumes
-./run.sh --status    # Show container status
-```
-
-### Step 4: Test UE Registration
-
-After `run.sh` completes, trigger a UE registration:
-
-```bash
-docker exec ueransim ./nr-ue -c ./config/uecfg.yaml
-```
-
-Verify in the AMF logs:
-```bash
-docker exec free5gc-cp grep -i "authentication success\|Registered" /var/log/free5gc/amf.log
-```
-
-Expected flow:
-```
-DeRegistered → Authentication → SecurityMode → ContextSetup → Registered
-```
-
-### Step 5: Trace the Registration Data Flow
-
-The trace script captures the **complete data flow** across all NFs during a UE registration:
-
-```bash
-./scripts/trace-registration-flow.sh
-```
-
-This script:
-1. Records log positions for all 8 NFs + UPF + UERANSIM
-2. Triggers a UE registration (or uses `--skip-ue` to trace existing logs)
-3. Waits for registration to complete
-4. Collects new logs from all NFs
-5. Parses SBI HTTP calls (request/response) across NFs
-6. Produces a chronological data flow report
-
-Output saved to `./logs/registration-flow-{timestamp}/`:
-```
-logs/registration-flow-{timestamp}/
-  ├── raw/               # Raw NF logs (amf.log, ausf.log, etc.)
-  ├── parsed/            # Parsed HTTP calls per NF
-  ├── merged-flow.log    # Chronological merged flow
-  └── summary.log        # Human-readable registration flow summary
-```
-
-**Trace options:**
-```bash
-./scripts/trace-registration-flow.sh              # Full trace (triggers new UE registration)
-./scripts/trace-registration-flow.sh --skip-ue    # Trace existing logs without new registration
-```
-
-### Full vs CP-Only Mode
-
-| Feature | Full Mode (Linux) | CP-Only Mode (Mac/any) |
-|---------|-------------------|------------------------|
-| UE Registration | Yes | Yes |
-| 5G-AKA Authentication | Yes | Yes |
-| Security Mode | Yes | Yes |
-| PDU Session Setup | Yes | No (no UPF) |
-| Internet Connectivity | Yes (via UPF → NAT) | No |
-| gtp5g Kernel Module | Required | Not needed |
-| Containers | 4 (db, cp, upf, ueransim) | 3 (db, cp, ueransim) |
-
-CP-only mode is useful for:
-- **Mac development** (Docker Desktop / OrbStack - no gtp5g kernel module)
-- **Studying the control plane** registration and authentication flow
-- **Tracing NF-to-NF SBI calls** without needing user plane
-
-### File Reference
-
-| File | Purpose |
-|------|---------|
-| `Dockerfile.build-all` | Multi-stage source builder (Go + C++ compilation) |
-| `Dockerfile.cp-local` | CP runtime image (ubuntu:22.04 + 8 NF binaries) |
-| `Dockerfile.upf-local` | UPF runtime image (debian:bookworm-slim + upf binary) |
-| `Dockerfile.ueransim-local` | UERANSIM runtime image (ubuntu:22.04 + nr-gnb/nr-ue/nr-cli) |
-| `docker-compose-portable.yaml` | 4-container deployment with debug configs |
-| `build.sh` | Build orchestrator: compile + extract + build runtime images |
-| `run.sh` | Start containers, provision subscriber, show status |
-| `scripts/provision-subscriber.sh` | WebUI-based subscriber provisioning + MongoDB patches |
-| `scripts/trace-registration-flow.sh` | Cross-NF data flow tracer for registration |
-| `config-debug/` | NF configs with `level: debug` logging (10 YAML files) |
-| `build-output/` | Extracted binaries (created by `build.sh`, gitignored) |
-| `logs/` | NF log files mounted from containers (created by `run.sh`) |
-
-### Default Subscriber Credentials
-
-These are provisioned automatically by `run.sh`:
-
-| Parameter | Value |
-|-----------|-------|
-| IMSI | `imsi-208930000000001` |
-| PLMN | `20893` (MCC=208, MNC=93) |
-| K (Permanent Key) | `8baf473f2f8fd09487cccbd7097c6862` |
-| OPC (Operator Code) | `8e27b6af0e692e750f32667a3b14605d` |
-| AMF | `8000` |
-| Auth Method | 5G_AKA |
-| Slices | SST=1/SD=010203, SST=1/SD=112233 |
-| DNN | `internet` |
-
-### Troubleshooting the Portable Build
-
-**Build fails with Go version error:**
-The Dockerfile uses `golang:latest` with `GOTOOLCHAIN=auto`. If free5GC requires a newer Go version, Docker will pull the latest automatically.
-
-**UERANSIM CMake fails on ARM64:**
-The Dockerfile auto-detects architecture via `uname -m` and downloads the matching CMake binary. This works on both `x86_64` and `aarch64`.
-
-**Port 5000 conflict on macOS:**
-macOS uses port 5000 for AirPlay Receiver. The provisioning script auto-detects macOS and uses port 5001 instead. Alternatively, disable AirPlay Receiver in System Settings > General > AirDrop & Handoff.
-
-**gNB SCTP connection refused:**
-If UERANSIM's gNB fails to connect to AMF on first start (SCTP Connection refused), restart it after CP is healthy:
-```bash
-docker restart ueransim
-```
-
-**PDU Session fails with "500 Internal Server Error":**
-In CP-only mode, this is expected - the SMF cannot reach the UPF (`Host lookup failed: upf.free5gc.org`). Registration still succeeds; only PDU session establishment fails.
-
-**Container logs:**
-```bash
-# View all container logs
-docker compose -f docker-compose-portable.yaml logs -f
-
-# View specific NF log
-docker exec free5gc-cp tail -f /var/log/free5gc/amf.log
-
-# View all NF logs
-docker exec free5gc-cp ls -la /var/log/free5gc/
-```
 
 ---
 
