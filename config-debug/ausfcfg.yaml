@@ -1,0 +1,38 @@
+info:
+  version: 1.0.3
+  description: AUSF initial local configuration
+
+configuration:
+  sbi:
+    scheme: http
+    registerIPv4: 10.100.200.16
+    bindingIPv4: 0.0.0.0
+    port: 8003
+    tls:
+      pem: cert/ausf.pem
+      key: cert/ausf.key
+  serviceNameList:
+    - nausf-auth
+  nrfUri: http://10.100.200.16:8000
+  nrfCertPem: cert/nrf.pem
+  plmnSupportList:
+    - mcc: 208
+      mnc: 93
+    - mcc: 123
+      mnc: 45
+  groupId: ausfGroup001
+  eapAkaSupiImsiPrefix: false
+  metrics:
+    enable: false
+    scheme: http
+    bindingIPv4: 0.0.0.0
+    port: 9091
+    tls:
+      pem: cert/ausf.pem
+      key: cert/ausf.key
+    namespace: free5gc
+
+logger:
+  enable: true
+  level: debug
+  reportCaller: false

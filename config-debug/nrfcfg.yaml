@@ -1,0 +1,39 @@
+info:
+  version: 1.0.2
+  description: NRF initial local configuration
+
+configuration:
+  MongoDBName: free5gc
+  MongoDBUrl: mongodb://db:27017
+  sbi:
+    scheme: http
+    registerIPv4: 10.100.200.16
+    bindingIPv4: 0.0.0.0
+    port: 8000
+    cert:
+      pem: cert/nrf.pem
+      key: cert/nrf.key
+    rootcert:
+      pem: cert/nrf.pem
+      key: cert/nrf.key
+    oauth: true
+  DefaultPlmnId:
+    mcc: 208
+    mnc: 93
+  serviceNameList:
+    - nnrf-nfm
+    - nnrf-disc
+  metrics:
+    enable: false
+    scheme: http
+    bindingIPv4: 0.0.0.0
+    port: 9091
+    tls:
+      pem: cert/nrf.pem
+      key: cert/nrf.key
+    namespace: free5gc
+
+logger:
+  enable: true
+  level: debug
+  reportCaller: false

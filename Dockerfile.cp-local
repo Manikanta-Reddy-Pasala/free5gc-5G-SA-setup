@@ -1,0 +1,38 @@
+# ============================================================
+# CP Runtime from Locally-Built Binaries
+# ============================================================
+# Uses binaries extracted from Dockerfile.build-all into
+# build-output/cp/. Lightweight runtime image.
+#
+# Build: docker compose -f docker-compose-portable.yaml build free5gc-cp
+# ============================================================
+
+FROM ubuntu:22.04
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    wget ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /free5gc
+
+# Copy all CP binaries from local build output
+COPY build-output/cp/nrf  ./nrf
+COPY build-output/cp/amf  ./amf
+COPY build-output/cp/ausf ./ausf
+COPY build-output/cp/udm  ./udm
+COPY build-output/cp/udr  ./udr
+COPY build-output/cp/smf  ./smf
+COPY build-output/cp/nssf ./nssf
+COPY build-output/cp/pcf  ./pcf
+
+# Copy startup script
+COPY consolidated/start-cp-nfs.sh ./start-cp-nfs.sh
+RUN chmod +x ./start-cp-nfs.sh && chmod +x ./nrf ./amf ./ausf ./udm ./udr ./smf ./nssf ./pcf
+
+# Create log directory
+RUN mkdir -p /var/log/free5gc
+
+# Expose SBI ports (unique per NF in consolidated mode)
+EXPOSE 8000 8001 8002 8003 8004 8005 8006 8007
+
+ENTRYPOINT ["./start-cp-nfs.sh"]

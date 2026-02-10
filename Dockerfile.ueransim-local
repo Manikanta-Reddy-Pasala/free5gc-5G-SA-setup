@@ -1,0 +1,30 @@
+# ============================================================
+# UERANSIM Runtime from Locally-Built Binaries
+# ============================================================
+# Uses UERANSIM binaries extracted from Dockerfile.build-all
+# into build-output/ueransim/.
+#
+# Build: docker compose -f docker-compose-portable.yaml build ueransim
+# ============================================================
+
+FROM ubuntu:22.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libsctp-dev lksctp-tools iproute2 iputils-ping procps psmisc \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /ueransim
+
+RUN mkdir -p config/ binder/ /etc/iproute2 && \
+    touch /etc/iproute2/rt_tables
+
+# Copy UERANSIM binaries from local build output
+COPY build-output/ueransim/nr-gnb ./nr-gnb
+COPY build-output/ueransim/nr-ue  ./nr-ue
+COPY build-output/ueransim/nr-cli ./nr-cli
+COPY build-output/ueransim/binder/ ./binder/
+RUN chmod +x ./nr-gnb ./nr-ue ./nr-cli
+
+VOLUME ["/ueransim/config"]

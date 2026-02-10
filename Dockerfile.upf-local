@@ -1,0 +1,28 @@
+# ============================================================
+# UPF Runtime from Locally-Built Binaries
+# ============================================================
+# Uses UPF binary extracted from Dockerfile.build-all into
+# build-output/upf/. Requires NET_ADMIN + gtp5g kernel module.
+#
+# Build: docker compose -f docker-compose-portable.yaml build free5gc-upf
+# ============================================================
+
+FROM debian:bookworm-slim
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    iptables iproute2 ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /free5gc
+
+# Copy UPF binary and iptables helper
+COPY build-output/upf/upf ./upf
+COPY build-output/upf/upf-iptables.sh ./upf-iptables.sh
+RUN chmod +x ./upf ./upf-iptables.sh
+
+# Create log directory
+RUN mkdir -p /var/log/free5gc
+
+EXPOSE 8805/udp 2152/udp
+
+CMD ["bash", "-c", "./upf-iptables.sh && ./upf -c ./config/upfcfg.yaml"]

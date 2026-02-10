@@ -1,0 +1,33 @@
+info:
+  version: 1.1.0
+  description: UDR initial local configuration
+
+configuration:
+  sbi:
+    scheme: http
+    registerIPv4: 10.100.200.16
+    bindingIPv4: 0.0.0.0
+    port: 8001
+    tls:
+      pem: cert/udr.pem
+      key: cert/udr.key
+  dbConnectorType: mongodb
+  mongodb:
+    name: free5gc
+    url: mongodb://db:27017
+  nrfUri: http://10.100.200.16:8000
+  nrfCertPem: cert/nrf.pem
+  metrics:
+    enable: false
+    scheme: http
+    bindingIPv4: 0.0.0.0
+    port: 9091
+    tls:
+      pem: cert/udr.pem
+      key: cert/udr.key
+    namespace: free5gc
+
+logger:
+  enable: true
+  level: debug
+  reportCaller: false

@@ -1,0 +1,104 @@
+# ============================================================
+# Universal Source Builder for free5GC + UERANSIM
+# ============================================================
+# Builds ALL free5GC control plane NFs, UPF, and UERANSIM
+# from source inside Docker. Works on Mac, Linux, any OS.
+#
+# Build:
+#   docker build -f Dockerfile.build-all -t free5gc-builder:v4.2.0 .
+#
+# Extract binaries:
+#   docker run --rm -v $(pwd)/build-output:/export free5gc-builder:v4.2.0
+# ============================================================
+
+# ── Stage 1: Build all free5GC NFs from source ────────────────
+FROM golang:1.21-bookworm AS free5gc-builder
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    git gcc g++ cmake autoconf libtool pkg-config \
+    libmnl-dev libyaml-dev ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /src
+
+# Clone free5GC v4.2.0 with all submodules (NFs + go-upf)
+RUN git clone --recursive -b v4.2.0 --depth 1 https://github.com/free5gc/free5gc.git \
+    && cd free5gc \
+    && git submodule sync \
+    && git submodule update --init --recursive --depth 1
+
+WORKDIR /src/free5gc
+
+# Build all control plane NFs
+RUN cd NFs && \
+    for nf in nrf amf ausf udm udr smf nssf pcf; do \
+        echo "=== Building $nf ===" && \
+        cd $nf && go build -o /output/cp/$nf -trimpath ./cmd && cd .. ; \
+    done
+
+# Build go-upf (user plane function)
+RUN cd NFs/upf && \
+    go build -o /output/upf/upf -trimpath ./cmd && \
+    cp -r internal/forwarder/gtp5g/cmd/gogtp5g-tunnel /tmp/gogtp5g-tunnel-src || true
+
+# Build gtp5g-tunnel utility if available
+RUN if [ -d "/tmp/gogtp5g-tunnel-src" ]; then \
+        cd /tmp/gogtp5g-tunnel-src && go build -o /output/upf/gogtp5g-tunnel -trimpath . ; \
+    fi
+
+# Create UPF iptables script
+RUN printf '#!/bin/bash\niptables -t nat -A POSTROUTING -o eth0 -j MASQUERADE\niptables -I FORWARD 1 -j ACCEPT\n' \
+    > /output/upf/upf-iptables.sh && chmod +x /output/upf/upf-iptables.sh
+
+# ── Stage 2: Build UERANSIM from source ───────────────────────
+FROM gcc:14.3.0 AS ueransim-builder
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV PATH="$PATH:/cmake/bin"
+
+ARG TARGET_ARCH=x86_64
+
+RUN apt-get update && \
+    apt-get install -y libsctp-dev lksctp-tools iproute2 make && \
+    mkdir /cmake && cd /cmake && \
+    wget -q https://github.com/Kitware/CMake/releases/download/v4.1.2/cmake-4.1.2-linux-${TARGET_ARCH}.sh -O cmake_installer.sh && \
+    chmod +x cmake_installer.sh && \
+    ./cmake_installer.sh --skip-license && \
+    cd .. && \
+    git clone -b master -j $(nproc) https://github.com/aligungr/UERANSIM && \
+    cd UERANSIM && \
+    make -j $(nproc)
+
+# ── Stage 3: Export all binaries ──────────────────────────────
+FROM ubuntu:22.04 AS export
+
+WORKDIR /output
+
+# Copy free5GC CP binaries
+COPY --from=free5gc-builder /output/cp/ ./cp/
+
+# Copy UPF binaries
+COPY --from=free5gc-builder /output/upf/ ./upf/
+
+# Copy UERANSIM binaries
+COPY --from=ueransim-builder /UERANSIM/build/nr-gnb ./ueransim/
+COPY --from=ueransim-builder /UERANSIM/build/nr-ue ./ueransim/
+COPY --from=ueransim-builder /UERANSIM/build/nr-cli ./ueransim/
+COPY --from=ueransim-builder /UERANSIM/build/nr-binder ./ueransim/binder/
+COPY --from=ueransim-builder /UERANSIM/build/libdevbnd.so ./ueransim/binder/
+
+# Create a manifest of what was built
+RUN echo "=== free5GC Portable Build ===" > /output/BUILD_MANIFEST.txt && \
+    echo "Built at: $(date -u)" >> /output/BUILD_MANIFEST.txt && \
+    echo "" >> /output/BUILD_MANIFEST.txt && \
+    echo "Control Plane:" >> /output/BUILD_MANIFEST.txt && \
+    ls -la /output/cp/ >> /output/BUILD_MANIFEST.txt && \
+    echo "" >> /output/BUILD_MANIFEST.txt && \
+    echo "UPF:" >> /output/BUILD_MANIFEST.txt && \
+    ls -la /output/upf/ >> /output/BUILD_MANIFEST.txt && \
+    echo "" >> /output/BUILD_MANIFEST.txt && \
+    echo "UERANSIM:" >> /output/BUILD_MANIFEST.txt && \
+    ls -la /output/ueransim/ >> /output/BUILD_MANIFEST.txt
+
+# Default: copy everything to /export when run with volume mount
+CMD ["cp", "-r", "/output/.", "/export/"]

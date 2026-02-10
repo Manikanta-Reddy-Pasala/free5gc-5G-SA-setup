@@ -1,0 +1,135 @@
+# ============================================================
+# free5GC Portable Deployment - Built from Source
+# ============================================================
+# Same 4-container consolidated approach, but using binaries
+# built locally via Dockerfile.build-all.
+#
+# Configs from config-debug/ (debug logging enabled).
+# Logs mounted to ./logs/ for easy access.
+#
+# Prerequisites:
+#   ./build.sh    # Build all binaries from source
+#
+# Run:
+#   ./run.sh      # Start, provision subscriber, verify
+#
+# Or manually:
+#   docker compose -f docker-compose-portable.yaml up -d
+# ============================================================
+
+services:
+
+  # ── Container 1: MongoDB (Database) ────────────────────────
+  db:
+    container_name: mongodb
+    image: mongo:4.4
+    command: mongod --port 27017
+    expose:
+      - "27017"
+    volumes:
+      - dbdata:/data/db
+    networks:
+      privnet:
+        aliases:
+          - db
+
+  # ── Container 2: ALL Control Plane NFs (8 NFs in 1) ───────
+  free5gc-cp:
+    container_name: free5gc-cp
+    image: free5gc-cp-local:v4.2.0
+    build:
+      context: .
+      dockerfile: Dockerfile.cp-local
+    volumes:
+      # Debug-level NF configs
+      - ./config-debug/nrfcfg.yaml:/free5gc/config/nrfcfg.yaml
+      - ./config-debug/amfcfg.yaml:/free5gc/config/amfcfg.yaml
+      - ./config-debug/ausfcfg.yaml:/free5gc/config/ausfcfg.yaml
+      - ./config-debug/udmcfg.yaml:/free5gc/config/udmcfg.yaml
+      - ./config-debug/udrcfg.yaml:/free5gc/config/udrcfg.yaml
+      - ./config-debug/smfcfg.yaml:/free5gc/config/smfcfg.yaml
+      - ./config-debug/nssfcfg.yaml:/free5gc/config/nssfcfg.yaml
+      - ./config-debug/pcfcfg.yaml:/free5gc/config/pcfcfg.yaml
+      - ./config-debug/uerouting.yaml:/free5gc/config/uerouting.yaml
+      - ./cert:/free5gc/cert
+      # Mount logs to host for easy access
+      - ./logs/cp:/var/log/free5gc
+    environment:
+      DB_URI: mongodb://db/free5gc
+      GIN_MODE: release
+    networks:
+      privnet:
+        ipv4_address: 10.100.200.16
+        aliases:
+          - nrf.free5gc.org
+          - amf.free5gc.org
+          - ausf.free5gc.org
+          - udm.free5gc.org
+          - udr.free5gc.org
+          - smf.free5gc.org
+          - nssf.free5gc.org
+          - pcf.free5gc.org
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8000"]
+      interval: 5s
+      timeout: 3s
+      start_period: 15s
+      retries: 10
+    depends_on:
+      db:
+        condition: service_started
+
+  # ── Container 3: UPF (User Plane - needs kernel module) ───
+  free5gc-upf:
+    container_name: upf
+    image: free5gc-upf-local:v4.2.0
+    build:
+      context: .
+      dockerfile: Dockerfile.upf-local
+    volumes:
+      - ./config-debug/upfcfg.yaml:/free5gc/config/upfcfg.yaml
+      - ./logs/upf:/var/log/free5gc
+    cap_add:
+      - NET_ADMIN
+    networks:
+      privnet:
+        aliases:
+          - upf.free5gc.org
+    depends_on:
+      free5gc-cp:
+        condition: service_healthy
+
+  # ── UERANSIM: gNB + UE Simulator (for testing) ────────────
+  ueransim:
+    container_name: ueransim
+    image: free5gc-ueransim-local:latest
+    build:
+      context: .
+      dockerfile: Dockerfile.ueransim-local
+    command: ./nr-gnb -c ./config/gnbcfg.yaml
+    volumes:
+      - ./config/gnbcfg.yaml:/ueransim/config/gnbcfg.yaml
+      - ./config/uecfg.yaml:/ueransim/config/uecfg.yaml
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - "/dev/net/tun"
+    networks:
+      privnet:
+        aliases:
+          - gnb.free5gc.org
+    depends_on:
+      free5gc-cp:
+        condition: service_healthy
+
+networks:
+  privnet:
+    ipam:
+      driver: default
+      config:
+        - subnet: 10.100.200.0/24
+    driver_opts:
+      com.docker.network.bridge.name: br-free5gc
+
+volumes:
+  dbdata:
