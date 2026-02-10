@@ -441,7 +441,7 @@ collect_new_logs() {
 
 collect_and_merge_logs() {
     # Collect new logs from all NFs, merge chronologically into a tagged file.
-    # Each line: SORT_KEY\x01NF\x01SUBMODULE\x01LEVEL\x01MESSAGE
+    # Each line: SORT_KEY\tNF\tSUBMODULE\tLEVEL\tMESSAGE (tab-separated)
     # Returns path to a temp dir containing merged.log
     local log_dir="$1"
     local tmp_dir
@@ -454,10 +454,20 @@ collect_and_merge_logs() {
         if [ -s "$log_dir/${nf}.log" ]; then
             (
             awk -v nf="$nf_upper" '
+            function extract_bracket(s, result,    p1, p2) {
+                p1 = index(s, "[")
+                if (p1 == 0) return 0
+                p2 = index(s, "]")
+                if (p2 == 0) return 0
+                result[0] = substr(s, p1+1, p2-p1-1)
+                result[1] = substr(s, p2+1)
+                return 1
+            }
             {
                 gsub(/\033\[[0-9;]*m/, "")
                 gsub(/^[ \t]+/, "")
-                if (match($0, /^[0-9]{4}-[0-9]{2}-[0-9]{2}T([0-9]{2}:[0-9]{2}:[0-9]{2})\.([0-9]+)Z/)) {
+                # Match: 2026-02-10T20:09:15.999079668Z
+                if ($0 ~ /^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]+Z/) {
                     ts = $0; sub(/Z.*/, "", ts); sub(/.*T/, "", ts)
                     split(ts, tp, "."); frac = tp[2]
                     while (length(frac) < 9) frac = frac "0"
@@ -465,14 +475,25 @@ collect_and_merge_logs() {
                     rest = $0; sub(/^[^ ]+ /, "", rest)
 
                     level = "INFO"; submod = "Main"; msg = rest
-                    if (match(rest, /\[([A-Z]+)\]\[([A-Za-z]+)\]\[([^\]]*)\]/, parts)) {
-                        level = parts[1]; submod = parts[3]; msg = rest
-                        sub(/^(\[[^\]]*\])+[ ]*/, "", msg)
-                    } else if (match(rest, /\[([A-Z]+)\]\[([A-Za-z]+)\]/, parts)) {
-                        level = parts[1]; submod = parts[2]; msg = rest
-                        sub(/^(\[[^\]]*\])+[ ]*/, "", msg)
+                    # Parse [LEVEL][Module][SubModule] or [LEVEL][Module]
+                    tmp = rest; b1[0]=""; b2[0]=""; b3[0]=""
+                    if (extract_bracket(tmp, b1)) {
+                        level = b1[0]
+                        tmp = b1[1]
+                        if (extract_bracket(tmp, b2)) {
+                            submod = b2[0]
+                            tmp = b2[1]
+                            if (extract_bracket(tmp, b3)) {
+                                submod = b3[0]
+                            }
+                        }
+                        # Strip all leading [...]  from msg
+                        msg = rest
+                        while (msg ~ /^\[/) {
+                            sub(/^\[[^\]]*\][ ]*/, "", msg)
+                        }
                     }
-                    printf "%s\x01%s\x01%s\x01%s\x01%s\n", sort_key, nf, submod, level, msg
+                    printf "%s\t%s\t%s\t%s\t%s\n", sort_key, nf, submod, level, msg
                 }
             }' "$log_dir/${nf}.log" > "${tmp_dir}/${nf}.tagged"
             ) &
@@ -482,22 +503,43 @@ collect_and_merge_logs() {
     # UPF logs
     if [ -s "$log_dir/upf.log" ]; then
         (
-        awk '{
+        awk '
+        function extract_bracket(s, result,    p1, p2) {
+            p1 = index(s, "[")
+            if (p1 == 0) return 0
+            p2 = index(s, "]")
+            if (p2 == 0) return 0
+            result[0] = substr(s, p1+1, p2-p1-1)
+            result[1] = substr(s, p2+1)
+            return 1
+        }
+        {
             gsub(/\033\[[0-9;]*m/, "")
             gsub(/^[ \t]+/, "")
-            if (match($0, /^[0-9]{4}-[0-9]{2}-[0-9]{2}T([0-9]{2}:[0-9]{2}:[0-9]{2})\.([0-9]+)Z/)) {
+            if ($0 ~ /^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]+Z/) {
                 ts = $0; sub(/Z.*/, "", ts); sub(/.*T/, "", ts)
                 split(ts, tp, "."); frac = tp[2]
                 while (length(frac) < 9) frac = frac "0"
                 sort_key = tp[1] "." frac
                 rest = $0; sub(/^[^ ]+ /, "", rest)
                 level = "INFO"; submod = "Main"; msg = rest
-                if (match(rest, /\[([A-Z]+)\]\[([A-Za-z]+)\]\[([^\]]*)\]/, p)) {
-                    level = p[1]; submod = p[3]; msg = rest; sub(/^(\[[^\]]*\])+[ ]*/, "", msg)
-                } else if (match(rest, /\[([A-Z]+)\]\[([A-Za-z]+)\]/, p)) {
-                    level = p[1]; submod = p[2]; msg = rest; sub(/^(\[[^\]]*\])+[ ]*/, "", msg)
+                tmp = rest; b1[0]=""; b2[0]=""; b3[0]=""
+                if (extract_bracket(tmp, b1)) {
+                    level = b1[0]
+                    tmp = b1[1]
+                    if (extract_bracket(tmp, b2)) {
+                        submod = b2[0]
+                        tmp = b2[1]
+                        if (extract_bracket(tmp, b3)) {
+                            submod = b3[0]
+                        }
+                    }
+                    msg = rest
+                    while (msg ~ /^\[/) {
+                        sub(/^\[[^\]]*\][ ]*/, "", msg)
+                    }
                 }
-                printf "%s\x01%s\x01%s\x01%s\x01%s\n", sort_key, "UPF", submod, level, msg
+                printf "%s\t%s\t%s\t%s\t%s\n", sort_key, "UPF", submod, level, msg
             }
         }' "$log_dir/upf.log" > "${tmp_dir}/upf.tagged"
         ) &
@@ -506,17 +548,40 @@ collect_and_merge_logs() {
     # UERANSIM logs (different timestamp format)
     if [ -s "$log_dir/ueransim.log" ]; then
         (
-        awk '{
-            if (match($0, /^\[([0-9]{4}-[0-9]{2}-[0-9]{2}) ([0-9]{2}:[0-9]{2}:[0-9]{2})\.([0-9]+)\]/, ts)) {
-                frac = ts[3]
+        awk '
+        function extract_bracket(s, result,    p1, p2) {
+            p1 = index(s, "[")
+            if (p1 == 0) return 0
+            p2 = index(s, "]")
+            if (p2 == 0) return 0
+            result[0] = substr(s, p1+1, p2-p1-1)
+            result[1] = substr(s, p2+1)
+            return 1
+        }
+        {
+            # Match: [2026-02-10 20:09:01.859]
+            if ($0 ~ /^\[[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]+\]/) {
+                # Extract timestamp from first bracket
+                inner = $0; sub(/^\[/, "", inner); sub(/\].*/, "", inner)
+                # inner = "2026-02-10 20:09:01.859"
+                split(inner, dt, " ")
+                split(dt[2], tp, ".")
+                frac = tp[2]
                 while (length(frac) < 9) frac = frac "0"
-                sort_key = ts[2] "." frac
-                rest = $0; sub(/^\[[^\]]*\] /, "", rest)
+                sort_key = tp[1] "." frac
+                rest = $0; sub(/^\[[^\]]*\] */, "", rest)
                 module = "gnb"; level = "info"; msg = rest
-                if (match(rest, /^\[([^\]]*)\] \[([^\]]*)\] (.*)/, p)) {
-                    module = p[1]; level = p[2]; msg = p[3]
+                # Parse [module] [level] message
+                b1[0]=""; b2[0]=""
+                if (extract_bracket(rest, b1)) {
+                    module = b1[0]
+                    tmp = b1[1]; sub(/^ */, "", tmp)
+                    if (extract_bracket(tmp, b2)) {
+                        level = b2[0]
+                        msg = b2[1]; sub(/^ */, "", msg)
+                    }
                 }
-                printf "%s\x01%s\x01%s\x01%s\x01%s\n", sort_key, "UERANSIM", module, toupper(level), msg
+                printf "%s\t%s\t%s\t%s\t%s\n", sort_key, "UERANSIM", module, toupper(level), msg
             }
         }' "$log_dir/ueransim.log" > "${tmp_dir}/ueransim.tagged"
         ) &
@@ -525,7 +590,7 @@ collect_and_merge_logs() {
     wait
 
     # Merge and sort chronologically
-    cat "${tmp_dir}"/*.tagged 2>/dev/null | sort -t$'\x01' -k1,1 > "${tmp_dir}/merged.log"
+    cat "${tmp_dir}"/*.tagged 2>/dev/null | sort -t$'\t' -k1,1 > "${tmp_dir}/merged.log"
 
     echo "${tmp_dir}"
 }
@@ -562,7 +627,7 @@ render_chronological_flow() {
 
     local line_count=0
 
-    while IFS=$'\x01' read -r ts nf submod level message; do
+    while IFS=$'\t' read -r ts nf submod level message; do
         [ -z "$ts" ] && continue
 
         if [ "$max_lines" -gt 0 ] && [ "$line_count" -ge "$max_lines" ]; then
@@ -782,7 +847,14 @@ cmd_test_simple() {
     local registered=false
 
     while [ $waited -lt $max_wait ]; do
-        if docker logs ueransim 2>&1 | tail -20 | grep -q "Registration complete\|PDU Session establishment is successful\|RM-REGISTERED"; then
+        # Check AMF log for Registered state (works in both full and CP-only modes)
+        if docker exec free5gc-cp grep -q "transition from \[ContextSetup\] to \[Registered\]\|RM-REGISTERED" /var/log/free5gc/amf.log 2>/dev/null; then
+            registered=true
+            log "UE registration completed (took ${waited}s)"
+            break
+        fi
+        # Also check gNB for Initial Context Setup (backup check)
+        if docker logs ueransim 2>&1 | tail -20 | grep -q "Initial Context Setup Request received"; then
             registered=true
             log "UE registration completed (took ${waited}s)"
             break
