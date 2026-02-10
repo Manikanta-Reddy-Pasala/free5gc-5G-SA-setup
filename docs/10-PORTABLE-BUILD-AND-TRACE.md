@@ -4,6 +4,8 @@ Build all free5GC NFs + UERANSIM from source inside Docker, run the 5G core, sim
 
 **Only requires Docker** - no Go, GCC, CMake, or other build tools on the host. Works on Mac (Apple Silicon/Intel), Linux (x86_64/ARM64), or any OS.
 
+Everything is done through a single script: `./free5gc.sh`
+
 ---
 
 ## 1. Build from Source
@@ -11,13 +13,12 @@ Build all free5GC NFs + UERANSIM from source inside Docker, run the 5G core, sim
 ```bash
 git clone https://github.com/Manikanta-Reddy-Pasala/free5gc-5G-SA-setup.git
 cd free5gc-5G-SA-setup
-chmod +x build.sh run.sh scripts/*.sh
 ```
 
 ### Full Build (~15 min first time, cached after)
 
 ```bash
-./build.sh
+./free5gc.sh build
 ```
 
 What happens:
@@ -47,52 +48,37 @@ Images:
 If binaries already exist in `build-output/`, just rebuild the runtime images:
 
 ```bash
-./build.sh --quick
+./free5gc.sh build --quick
 ```
 
 ---
 
-## 2. Run the 5G Core
-
-### Option A: Full Mode (Linux with gtp5g kernel module)
-
-Starts all 4 containers: MongoDB, Control Plane (8 NFs), UPF, UERANSIM.
+## 2. Start the 5G Core
 
 ```bash
-./run.sh
+./free5gc.sh start
 ```
 
-### Option B: CP-Only Mode (Mac / no gtp5g)
+Auto-detects mode:
+- **Full mode** (Linux with gtp5g): Starts 4 containers - MongoDB, Control Plane (8 NFs), UPF, UERANSIM
+- **CP-only mode** (Mac / no gtp5g): Starts 3 containers - MongoDB, Control Plane, UERANSIM
 
-Starts 3 containers: MongoDB, Control Plane, UERANSIM. Skips UPF.
+### What `start` Does
 
-```bash
-./run.sh --cp-only
-```
-
-UE registration and authentication work fully. Only PDU session establishment (data plane) is skipped since there is no UPF.
-
-### What run.sh Does
-
-1. Starts containers via `docker compose -f docker-compose-portable.yaml`
-2. Waits for CP health check (polls NRF HTTP endpoint, up to 120s)
-3. Provisions a default subscriber using the WebUI API:
+1. Detects mode by checking `lsmod | grep gtp5g`
+2. Starts containers via `docker compose -f docker-compose-portable.yaml`
+3. Waits for CP health check (polls NRF HTTP endpoint, up to 120s)
+4. Provisions a default subscriber using the WebUI API:
    - Starts a temporary `free5gc/webui:v4.2.0` container
    - Creates subscriber via `POST /api/subscriber/{imsi}/{plmn}`
    - Patches MongoDB: adds `allowedSessionTypes` and `smPolicySnssaiData`
    - Removes the temporary WebUI container
-4. Shows container status
-
-### Other Commands
-
-```bash
-./run.sh --status    # Show container status
-./run.sh --down      # Stop all containers, remove volumes
-```
+5. Restarts UERANSIM (ensures gNB connects after AMF NGAP is ready)
+6. Shows container status
 
 ### Default Subscriber
 
-Provisioned automatically by `run.sh`:
+Provisioned automatically by `start`:
 
 | Parameter | Value |
 |-----------|-------|
@@ -107,155 +93,142 @@ Provisioned automatically by `run.sh`:
 
 ---
 
-## 3. UE Simulation
+## 3. Test UE Registration
 
-After `run.sh` finishes, the gNB is already running and connected to AMF. To simulate a UE:
-
-### Register a UE
+### Simple Test (1 UE + trace)
 
 ```bash
-docker exec ueransim ./nr-ue -c ./config/uecfg.yaml
-```
-
-### Verify Registration Succeeded
-
-```bash
-# Check AMF state transitions
-docker exec free5gc-cp grep -E "Authentication Success|SecurityMode|Registered" /var/log/free5gc/amf.log
-```
-
-Expected output shows the full state machine:
-```
-transition from [Deregistered] to [Authentication]
-Authentication Success
-transition from [Authentication] to [SecurityMode]
-Handle Security Mode Complete
-transition from [SecurityMode] to [ContextSetup]
-transition from [ContextSetup] to [Registered]
-```
-
-### Check Authentication (AUSF)
-
-```bash
-docker exec free5gc-cp grep "5G AKA" /var/log/free5gc/ausf.log
-```
-
-Expected: `5G AKA confirmation succeeded`
-
-### Check Subscriber Lookup (UDM/UDR)
-
-```bash
-docker exec free5gc-cp tail -20 /var/log/free5gc/udm.log
-docker exec free5gc-cp tail -20 /var/log/free5gc/udr.log
-```
-
-### Check PDU Session (SMF) - Full Mode Only
-
-```bash
-docker exec free5gc-cp grep -i "pdu session" /var/log/free5gc/smf.log
-```
-
-In CP-only mode, you'll see `Host lookup failed: upf.free5gc.org` - this is expected.
-
----
-
-## 4. Data Flow Tracing
-
-The trace script captures the **complete registration flow** across all NFs with detailed SBI HTTP request/response logs.
-
-### Run a Full Trace
-
-```bash
-./scripts/trace-registration-flow.sh
+./free5gc.sh test
 ```
 
 This will:
 1. Record current log positions for all 8 CP NFs + UPF + UERANSIM
-2. Trigger a new UE registration
-3. Wait for registration to complete (or timeout after 30s)
-4. Collect only the **new** log lines from each NF
-5. Parse SBI HTTP calls (method, path, status code)
-6. Merge all logs chronologically
-7. Generate a summary of the registration flow
+2. Kill any existing UE processes
+3. Start 1 UE: `docker exec -d ueransim ./nr-ue -c ./config/uecfg.yaml`
+4. Wait up to 30s for registration to complete
+5. Collect new logs from every NF
+6. **Print the registration trace** showing the NF chain:
+   - UE -> gNB -> AMF -> AUSF -> UDM -> UDR -> MongoDB and back
+   - Key events: Authentication Success, Security Mode, Registered, PDU Session
+   - HTTP calls: POST /nausf-auth, GET /nudm-sdm, etc.
+7. Print PASS/FAIL result
+8. Save trace to `logs/trace-{timestamp}/trace.log`
 
-### Trace Existing Logs (No New Registration)
+### Full Test (16 attach + 200 reject + 100 identify)
 
 ```bash
-./scripts/trace-registration-flow.sh --skip-ue
+./free5gc.sh test full
 ```
 
-### Output
+**Phase 1: Attach 16 UEs**
+- Provisions 16 subscribers via direct MongoDB writes
+- Launches 16 UEs simultaneously
+- Chronological trace showing complete NF-to-NF flow:
+  UERANSIM -> AMF -> AUSF -> UDM -> UDR -> MongoDB (request chain)
+  then back: MongoDB -> UDR -> UDM -> AUSF -> AMF -> UERANSIM (response chain)
+- Per-UE status table (REGISTERED + PDU session status)
 
-Results are saved to `./logs/registration-flow-{timestamp}/`:
+**Phase 2: Reject 200 UEs**
+- Launches 200 unprovisioned UEs in 4 batches of 50
+- Chronological trace showing rejection flow across AMF/AUSF/UDM/UDR
+- Rejection summary: RRC attempts, auth errors, registration rejects
+- Verifies 0 context setups (all rejected)
 
+**Phase 3: Identify 100 UEs**
+- Provisions and registers 100 UEs in 2 batches of 50
+- Chronological trace showing SUPI/SUCI identification events
+- Verifies all 100 UEs are identified and registered
+
+**Trace Output Format:**
 ```
-logs/registration-flow-20260210-192600/
-  ├── raw/                  # Raw log files per NF
-  │   ├── amf.log
-  │   ├── ausf.log
-  │   ├── udm.log
-  │   ├── udr.log
-  │   ├── smf.log
-  │   ├── nrf.log
-  │   ├── nssf.log
-  │   ├── pcf.log
-  │   ├── upf.log
-  │   └── ueransim.log
-  ├── parsed/               # Parsed HTTP calls per NF
-  │   ├── amf-http.log
-  │   ├── ausf-http.log
-  │   └── ...
-  ├── merged-flow.log       # All NFs merged chronologically
-  └── summary.log           # Human-readable registration flow
+TIMESTAMP    FLOW  NF        MODULE       LVL    MESSAGE
+------------ ----- --------- ------------ -----  -------
+13:52:01.234  ==>  UERANSIM  [nas]        INFO   Sending initial-registration
+13:52:01.235  ==>  AMF       [NGAP]       INFO   Handle InitialUEMessage
+13:52:01.236  -->  AMF       [GMM]        INFO   Nausf_UEAuthentication
+13:52:01.237  >>>  AUSF      [GIN]        INFO   POST /nausf-auth/v1/ue-authentications
+13:52:01.238  -->  AUSF      [UeAuth]     INFO   Nudm_UEAuthentication
+13:52:01.239  >>>  UDM       [GIN]        INFO   POST /nudm-ueau/v1/.../security-information
+13:52:01.240  -->  UDM       [UEAU]       INFO   Nudr_DataRepository
+13:52:01.241  >>>  UDR       [GIN]        INFO   GET /nudr-dr/v1/subscription-data/.../authentication-data
+13:52:01.245  <<<  UDR       [GIN]        INFO   200 | GET | /nudr-dr/...
+13:52:01.246  <<<  UDM       [GIN]        INFO   200 | POST | /nudm-ueau/...
+13:52:01.247  <<<  AUSF      [GIN]        INFO   201 | POST | /nausf-auth/...
+13:52:01.300  ==>  AMF       [GMM]        INFO   Authentication Success
 ```
+
+Legend: `==>` key milestones, `>>>` SBI requests, `<<<` SBI responses, `-->` NF-to-NF calls, `[!!]` errors
+
+**Output:**
+- Summary with pass/fail counts per phase
+- Detailed trace saved to `logs/trace-{timestamp}.log`
+- Raw per-NF logs in `logs/trace-full-{timestamp}/`
 
 ### What the Trace Shows
 
 The registration flow across NFs:
 
 ```
-UE → gNB          : RRC Setup Request / NAS Registration Request
-gNB → AMF         : NGAP Initial UE Message (N2/SCTP)
-AMF → AUSF        : POST /nausf-auth/v1/ue-authentications (SBI)
-AUSF → UDM        : POST /nudm-ueau/v1/{supi}/security-information (SBI)
-UDM → UDR         : GET /nudr-dr/v1/subscription-data/{ueId}/authentication-data (SBI)
-UDR → MongoDB     : query subscriptionData.authenticationData
-  ← responses flow back through each NF ←
-AMF → UE          : Authentication Request (5G-AKA challenge)
-UE → AMF          : Authentication Response
-AMF → AUSF        : PUT .../5g-aka-confirmation
-  ← Authentication Success ←
-AMF → UE          : Security Mode Command
-UE → AMF          : Security Mode Complete
-AMF → gNB         : Initial Context Setup Request
-gNB → AMF         : Initial Context Setup Response
-  ← UE is now REGISTERED ←
-AMF → SMF         : POST /nsmf-pdusession/v1/sm-contexts (PDU Session)
-SMF → UDM         : GET /nudm-sdm/v2/{supi}/sm-data
-SMF → PCF         : POST /npcf-smpolicycontrol/v1/sm-policies
-SMF → UPF         : PFCP Session Establishment (N4)
-  ← PDU Session Established (full mode) or fails (CP-only) ←
+UE -> gNB          : RRC Setup Request / NAS Registration Request
+gNB -> AMF         : NGAP Initial UE Message (N2/SCTP)
+AMF -> AUSF        : POST /nausf-auth/v1/ue-authentications (SBI)
+AUSF -> UDM        : POST /nudm-ueau/v1/{supi}/security-information (SBI)
+UDM -> UDR         : GET /nudr-dr/v1/subscription-data/{ueId}/authentication-data (SBI)
+UDR -> MongoDB     : query subscriptionData.authenticationData
+  <- responses flow back through each NF <-
+AMF -> UE          : Authentication Request (5G-AKA challenge)
+UE -> AMF          : Authentication Response
+AMF -> AUSF        : PUT .../5g-aka-confirmation
+  <- Authentication Success <-
+AMF -> UE          : Security Mode Command
+UE -> AMF          : Security Mode Complete
+AMF -> gNB         : Initial Context Setup Request
+gNB -> AMF         : Initial Context Setup Response
+  <- UE is now REGISTERED <-
+AMF -> SMF         : POST /nsmf-pdusession/v1/sm-contexts (PDU Session)
+SMF -> UDM         : GET /nudm-sdm/v2/{supi}/sm-data
+SMF -> PCF         : POST /npcf-smpolicycontrol/v1/sm-policies
+SMF -> UPF         : PFCP Session Establishment (N4)
+  <- PDU Session Established (full mode) or fails (CP-only) <-
 ```
+
+---
+
+## 4. Other Commands
+
+### Stop
+
+```bash
+./free5gc.sh stop
+```
+
+Runs `docker compose -f docker-compose-portable.yaml down -v` to stop and remove all containers and volumes.
+
+### Status
+
+```bash
+./free5gc.sh status
+```
+
+Shows `docker compose ps` output for all containers.
+
+### Logs
+
+```bash
+./free5gc.sh logs              # Tail all container logs
+./free5gc.sh logs amf          # Tail AMF NF log (/var/log/free5gc/amf.log)
+./free5gc.sh logs smf          # Tail SMF NF log
+./free5gc.sh logs upf          # Tail UPF container logs
+./free5gc.sh logs ueransim     # Tail UERANSIM container logs
+```
+
+Available NF names: `amf`, `ausf`, `udm`, `udr`, `smf`, `nrf`, `nssf`, `pcf`, `upf`, `ueransim`
 
 ---
 
 ## 5. Debug Logging
 
 All configs in `config-debug/` have `level: debug` set. This is used by the portable deployment (`docker-compose-portable.yaml`) by default.
-
-### View Live Logs
-
-```bash
-# All containers
-docker compose -f docker-compose-portable.yaml logs -f
-
-# Specific NF log file
-docker exec free5gc-cp tail -f /var/log/free5gc/amf.log
-docker exec free5gc-cp tail -f /var/log/free5gc/smf.log
-
-# List all available NF logs
-docker exec free5gc-cp ls -la /var/log/free5gc/
-```
 
 ### Logs on Host
 
@@ -276,8 +249,7 @@ To reduce log volume, use `config-consolidated/` instead of `config-debug/` in `
 
 | | Full Mode | CP-Only Mode |
 |---|-----------|-------------|
-| **Command** | `./run.sh` | `./run.sh --cp-only` |
-| **Platform** | Linux (gtp5g required) | Mac, Linux, any OS |
+| **Requirement** | Linux with gtp5g kernel module | Mac, Linux, any OS |
 | **Containers** | 4: db, cp, upf, ueransim | 3: db, cp, ueransim |
 | **Registration** | Yes | Yes |
 | **Authentication** | Yes | Yes |
@@ -285,9 +257,17 @@ To reduce log volume, use `config-consolidated/` instead of `config-debug/` in `
 | **Internet via UE** | Yes (`ping -I uesimtun0 8.8.8.8`) | No |
 | **Use case** | Full end-to-end testing | Control plane study, SBI tracing |
 
+Mode is auto-detected by `./free5gc.sh start`.
+
 ---
 
 ## 7. File Reference
+
+### Core Script
+
+| File | What It Does |
+|------|-------------|
+| `free5gc.sh` | Unified script: build, start, test, stop, status, logs |
 
 ### Build Files
 
@@ -297,16 +277,6 @@ To reduce log volume, use `config-consolidated/` instead of `config-debug/` in `
 | `Dockerfile.cp-local` | Runtime image for Control Plane (ubuntu:22.04 + 8 NF binaries) |
 | `Dockerfile.upf-local` | Runtime image for UPF (debian:bookworm-slim + upf binary) |
 | `Dockerfile.ueransim-local` | Runtime image for UERANSIM (ubuntu:22.04 + nr-gnb/nr-ue/nr-cli) |
-| `build.sh` | Orchestrates: source build → extract binaries → build runtime images |
-
-### Run & Test Files
-
-| File | What It Does |
-|------|-------------|
-| `docker-compose-portable.yaml` | 4-container deployment using locally-built images + debug configs |
-| `run.sh` | Starts containers, provisions subscriber, shows status |
-| `scripts/provision-subscriber.sh` | Creates subscriber via WebUI API + patches MongoDB |
-| `scripts/trace-registration-flow.sh` | Captures cross-NF data flow during UE registration |
 
 ### Config & Output Directories
 
@@ -315,9 +285,21 @@ To reduce log volume, use `config-consolidated/` instead of `config-debug/` in `
 | `config-debug/` | NF YAML configs with `level: debug` (10 files) |
 | `config/` | Standard NF configs + gNB/UE configs |
 | `cert/` | TLS certificates for NF-to-NF communication |
-| `build-output/` | Extracted binaries (created by `build.sh`, not committed) |
+| `build-output/` | Extracted binaries (created by `build`, not committed) |
 | `logs/cp/` | CP NF log files mounted from container |
 | `logs/upf/` | UPF log files mounted from container |
+| `logs/trace-*/` | Test traces and raw per-NF logs |
+
+### Legacy Scripts (still available)
+
+| File | What It Does |
+|------|-------------|
+| `build.sh` | Standalone build orchestrator (superseded by `free5gc.sh build`) |
+| `run.sh` | Standalone run + provision (superseded by `free5gc.sh start`) |
+| `scripts/provision-subscriber.sh` | Standalone subscriber provisioning |
+| `scripts/trace-registration-flow.sh` | Standalone registration trace |
+| `scripts/ue-flow-trace.sh` | Advanced flow tracing with 3 test scenarios |
+| `scripts/ue-simulation-test.sh` | Full UE simulation test suite |
 
 ---
 
@@ -331,28 +313,28 @@ To reduce log volume, use `config-consolidated/` instead of `config-debug/` in `
 
 ### Runtime Issues
 
-**gNB "SCTP Connection refused"** - AMF's NGAP listener may not be ready yet. Restart UERANSIM:
+**gNB "SCTP Connection refused"** - AMF's NGAP listener may not be ready yet. The `start` command automatically restarts UERANSIM after CP is healthy. If issues persist:
 ```bash
 docker restart ueransim
 ```
 
-**Port 5000 conflict on macOS** - AirPlay uses port 5000. The provisioning script auto-detects macOS and uses port 5001. Or disable AirPlay: System Settings > General > AirDrop & Handoff.
+**Port 5000 conflict on macOS** - AirPlay uses port 5000. The provisioning logic auto-detects macOS and uses port 5001. Or disable AirPlay: System Settings > General > AirDrop & Handoff.
 
 **"CreateSmContextRequest Error: 500"** - Expected in CP-only mode. SMF can't reach UPF. Registration still succeeds.
 
-**"Nil PermanentKey" from UDM** - Subscriber wasn't provisioned correctly. Re-run provisioning:
+**"Nil PermanentKey" from UDM** - Subscriber wasn't provisioned correctly. Re-run:
 ```bash
-./scripts/provision-subscriber.sh imsi-208930000000001 20893
+./free5gc.sh stop && ./free5gc.sh start
 ```
 
 ### Useful Commands
 
 ```bash
 # Container status
-docker compose -f docker-compose-portable.yaml ps
+./free5gc.sh status
 
 # Restart everything
-./run.sh --down && ./run.sh --cp-only
+./free5gc.sh stop && ./free5gc.sh start
 
 # Check subscriber in MongoDB
 docker exec mongodb mongo mongodb://localhost:27017/free5gc --quiet --eval \
@@ -362,5 +344,5 @@ docker exec mongodb mongo mongodb://localhost:27017/free5gc --quiet --eval \
 docker exec free5gc-cp grep "Registered" /var/log/free5gc/amf.log
 
 # Follow all NF logs in real time
-docker compose -f docker-compose-portable.yaml logs -f --tail 50
+./free5gc.sh logs
 ```

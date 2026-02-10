@@ -23,51 +23,41 @@ Your Phone (UE)          5G Base Station (gNB)        5G Core Network
 
 ## Quick Start
 
-```bash
-ssh root@your-server
-git clone https://github.com/Manikanta-Reddy-Pasala/free5gc-5G-SA-setup.git
-cd free5gc-5G-SA-setup
-chmod +x setup-free5gc.sh
-./setup-free5gc.sh install
-```
-
-This handles everything: Docker, GTP5G kernel module (built via Docker for kernel compatibility), services, subscriber provisioning, and testing. You'll be prompted to choose an install mode.
-
-### Install Modes
-
-| Mode | Containers | What's Included | Best For |
-|------|-----------|-----------------|----------|
-| **`minimal`** (default) | 4 | All-in-one CP + UPF + MongoDB + UERANSIM | **Recommended** - fastest startup, lowest resources |
-| **`consolidated`** | 12 | Individual core NFs + WebUI + UERANSIM | When you need per-NF logs/scaling + WebUI |
-| **`full`** | 16 | Everything + N3IWF + TNGF + N3IWUE + CHF + NEF | Complete lab with Wi-Fi access, charging, NEF |
-
-```bash
-# Interactive mode selection (prompts you, default: minimal)
-./setup-free5gc.sh install
-
-# Or specify directly
-./setup-free5gc.sh install minimal        # 4 containers (default)
-./setup-free5gc.sh install consolidated   # 12 containers
-./setup-free5gc.sh install full           # 16 containers
-```
-
-**Minimal** merges 8 control plane NFs (NRF, AMF, AUSF, UDM, UDR, SMF, NSSF, PCF) into a single `free5gc-cp` container. No WebUI - subscribers are provisioned directly via MongoDB.
-**Consolidated** runs each NF as a separate container with WebUI for browser-based subscriber management.
-**Full** includes everything for complete 5G SA testing including non-3GPP access (N3IWF, TNGF), charging (CHF), and network exposure (NEF).
-
-### Build from Source (Mac / Linux / Any OS)
-
-Only needs Docker - no Go, GCC, or CMake on host. Works on Apple Silicon, Intel, ARM64, x86_64.
+Only needs Docker - no Go, GCC, or CMake on host. Works on Mac (Apple Silicon/Intel), Linux, or any OS.
 
 ```bash
 git clone https://github.com/Manikanta-Reddy-Pasala/free5gc-5G-SA-setup.git
 cd free5gc-5G-SA-setup
-./build.sh                    # Compile all NFs from source (~15 min first time)
-./run.sh --cp-only            # Start without UPF (Mac - no gtp5g needed)
-./run.sh                      # Start with UPF (Linux - full mode)
+./free5gc.sh build            # Compile all NFs from source (~15 min first time)
+./free5gc.sh start            # Start containers + provision subscriber
+./free5gc.sh test             # 1 UE registration + trace (shows NF-to-NF flow)
+```
+
+Auto-detects mode: Linux with gtp5g kernel module runs full mode (4 containers including UPF), otherwise CP-only mode (3 containers, Mac compatible).
+
+### All Commands
+
+```bash
+./free5gc.sh build                # Compile all NFs from source (~15 min)
+./free5gc.sh build --quick        # Rebuild runtime images only (skip source compile)
+./free5gc.sh start                # Start containers + provision subscriber
+./free5gc.sh test                 # 1 UE registration + full NF flow trace
+./free5gc.sh test full            # 16 attach + 200 reject + 100 identify + trace
+./free5gc.sh stop                 # Stop and remove all containers
+./free5gc.sh status               # Show container status
+./free5gc.sh logs [nf]            # Tail logs (all or specific NF like amf, smf)
 ```
 
 See the full guide: [docs/10-PORTABLE-BUILD-AND-TRACE.md](docs/10-PORTABLE-BUILD-AND-TRACE.md)
+
+### Alternative: Full Install with GTP5G
+
+For a full install on Linux (including Docker, GTP5G kernel module, and multiple deployment modes):
+
+```bash
+chmod +x setup-free5gc.sh
+./setup-free5gc.sh install        # Installs everything, prompts for mode
+```
 
 ### Manual Setup
 
@@ -952,6 +942,19 @@ UE ──(Uu)──> gNB ──(N2/SCTP)──> AMF ──(SBI/HTTP2)──> Oth
 
 ## Management
 
+### Portable deployment (free5gc.sh)
+
+```bash
+./free5gc.sh status               # Show container status
+./free5gc.sh test                 # 1 UE registration + trace
+./free5gc.sh test full            # 16 UE attach + 200 UE reject + trace
+./free5gc.sh logs amf             # View AMF logs (or: smf, ausf, udm, udr, etc.)
+./free5gc.sh stop                 # Stop and remove all containers
+./free5gc.sh start                # Start containers + provision subscriber
+```
+
+### Full install (setup-free5gc.sh)
+
 ```bash
 ./setup-free5gc.sh status              # Check all services and UE status
 ./setup-free5gc.sh test                # Re-run registration and connectivity tests
@@ -962,8 +965,6 @@ UE ──(Uu)──> gNB ──(N2/SCTP)──> AMF ──(SBI/HTTP2)──> Oth
 ./setup-free5gc.sh clean               # Stop and remove all data
 ./setup-free5gc.sh install [mode]      # Full install (Docker, GTP5G, free5GC, test)
 ```
-
-You can also set the mode via environment variable: `INSTALL_MODE=minimal ./setup-free5gc.sh start`
 
 ### WebUI
 
