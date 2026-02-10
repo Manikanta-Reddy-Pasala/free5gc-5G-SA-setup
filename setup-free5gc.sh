@@ -3,7 +3,7 @@ set -euo pipefail
 
 # ============================================================
 # free5GC Docker Compose Setup Script with UERANSIM
-# Tested on: Ubuntu 22.04 LTS, Kernel 5.15.x
+# Tested on: Ubuntu 22.04 LTS, Kernel 5.15.x / 6.8.x
 # free5GC version: v4.2.0
 # UERANSIM version: v3.2.7
 # ============================================================
@@ -63,23 +63,72 @@ install_gtp5g() {
         return 0
     fi
 
-    apt-get install -y -qq linux-headers-$(uname -r) build-essential make gcc
+    apt-get install -y -qq linux-headers-$(uname -r) build-essential make gcc git
 
     cd /root
-    if [ ! -d "gtp5g" ]; then
+    if [ -d "gtp5g" ]; then
+        log_info "Updating existing gtp5g source..."
+        cd gtp5g
+        git fetch --tags
+        local latest_tag
+        latest_tag=$(git tag --sort=-version:refname | head -1)
+        if [ -n "$latest_tag" ]; then
+            log_info "Checking out latest release: $latest_tag"
+            git checkout "$latest_tag"
+        else
+            git pull origin main || git pull origin master || true
+        fi
+    else
         git clone https://github.com/free5gc/gtp5g.git
+        cd gtp5g
+        local latest_tag
+        latest_tag=$(git tag --sort=-version:refname | head -1)
+        if [ -n "$latest_tag" ]; then
+            log_info "Checking out latest release: $latest_tag"
+            git checkout "$latest_tag"
+        fi
     fi
 
-    cd gtp5g
+    log_info "Building GTP5G for kernel $(uname -r)..."
     make clean || true
     make
     make install
-    modprobe gtp5g
+
+    # Load udp_tunnel dependency first
+    modprobe udp_tunnel 2>/dev/null || true
+
+    # Try modprobe first, fall back to insmod if it fails
+    if ! modprobe gtp5g 2>/dev/null; then
+        log_warn "modprobe failed, trying insmod..."
+        local ko_path="/lib/modules/$(uname -r)/kernel/drivers/net/gtp5g.ko"
+        if [ -f "$ko_path" ]; then
+            insmod "$ko_path" 2>&1 || true
+        elif [ -f "/root/gtp5g/gtp5g.ko" ]; then
+            insmod /root/gtp5g/gtp5g.ko 2>&1 || true
+        fi
+    fi
+
+    sleep 1
 
     if lsmod | grep -q gtp5g; then
-        log_info "GTP5G kernel module loaded successfully"
+        log_info "GTP5G kernel module loaded successfully ($(modinfo -F version gtp5g 2>/dev/null || echo 'unknown version'))"
     else
         log_error "Failed to load GTP5G kernel module"
+        log_error "Kernel: $(uname -r)"
+        log_warn "Checking dmesg for module loading errors..."
+        dmesg | tail -20 | grep -i -E "gtp5g|module|signature|cert|verify" || true
+        echo ""
+        # Check Secure Boot
+        if command -v mokutil &>/dev/null; then
+            local sb_state
+            sb_state=$(mokutil --sb-state 2>/dev/null || echo "unknown")
+            if echo "$sb_state" | grep -qi "enabled"; then
+                log_error "Secure Boot is ENABLED - unsigned kernel modules cannot be loaded"
+                log_warn "Options to fix:"
+                log_warn "  1. Disable Secure Boot in BIOS/UEFI settings"
+                log_warn "  2. Sign the module: see https://wiki.ubuntu.com/UEFI/SecureBoot/Signing"
+            fi
+        fi
         exit 1
     fi
 }
