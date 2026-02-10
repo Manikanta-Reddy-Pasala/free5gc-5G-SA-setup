@@ -50,15 +50,6 @@ Auto-detects mode: Linux with gtp5g kernel module runs full mode (4 containers i
 
 See the full guide: [docs/10-PORTABLE-BUILD-AND-TRACE.md](docs/10-PORTABLE-BUILD-AND-TRACE.md)
 
-### Alternative: Full Install with GTP5G
-
-For a full install on Linux (including Docker, GTP5G kernel module, and multiple deployment modes):
-
-```bash
-chmod +x setup-free5gc.sh
-./setup-free5gc.sh install        # Installs everything, prompts for mode
-```
-
 ### Manual Setup
 
 Follow the step-by-step guide: [docs/02-SETUP-GUIDE.md](docs/02-SETUP-GUIDE.md)
@@ -112,11 +103,9 @@ These are the **minimum containers needed** to run a functional 5G SA core netwo
 
 **Minimum viable command:**
 ```bash
-# Minimal mode: 4 containers = all-in-one CP + UPF + MongoDB + UERANSIM
-./setup-free5gc.sh install minimal
-
-# The all-in-one CP container (free5gc-cp) runs all 8 mandatory + recommended NFs
-# in a single process, using docker-compose-consolidated.yaml
+./free5gc.sh build   # Build from source (~15 min first time)
+./free5gc.sh start   # Start CP + MongoDB + UERANSIM (auto-detects mode)
+./free5gc.sh test    # Register 1 UE with full NF-to-NF trace
 ```
 
 ### Recommended - Important but Survivable Without
@@ -145,7 +134,7 @@ These are **not 3GPP core network functions**. They are tools, simulators, or sp
 ### Visual: What to Run for Each Use Case
 
 ```
-INSTALL MODE: minimal (4 containers) - ./setup-free5gc.sh install minimal  [DEFAULT]
+INSTALL MODE: minimal (4 containers) - ./free5gc.sh start  [DEFAULT]
 ┌──────────────────────────────────────────────┐
 │  mongodb                                     │  Database
 │  free5gc-cp (NRF+AMF+AUSF+UDM+UDR+          │  All 8 NFs in 1 container
@@ -156,7 +145,7 @@ INSTALL MODE: minimal (4 containers) - ./setup-free5gc.sh install minimal  [DEFA
   Fastest startup, lowest resources
   No WebUI - subscriber provisioned via MongoDB
 
-INSTALL MODE: consolidated (12 containers) - ./setup-free5gc.sh install consolidated
+INSTALL MODE: consolidated (12 containers) - docker compose -f docker-compose-consolidated.yaml up -d
 ┌──────────────────────────────────────────────┐
 │  mongodb → udr → udm → ausf                 │  Authentication chain
 │  nrf                                         │  Service discovery
@@ -166,7 +155,7 @@ INSTALL MODE: consolidated (12 containers) - ./setup-free5gc.sh install consolid
 │  ueransim                                    │  gNB + UE simulator
 └──────────────────────────────────────────────┘
 
-INSTALL MODE: full (16 containers) - ./setup-free5gc.sh install full
+INSTALL MODE: full (16 containers) - docker compose -f docker-compose.yaml up -d
   = consolidated + chf, n3iwf, tngf, nef, n3iwue
 
 PRODUCTION: Real gNB (no UERANSIM)
@@ -951,19 +940,6 @@ UE ──(Uu)──> gNB ──(N2/SCTP)──> AMF ──(SBI/HTTP2)──> Oth
 ./free5gc.sh logs amf             # View AMF logs (or: smf, ausf, udm, udr, etc.)
 ./free5gc.sh stop                 # Stop and remove all containers
 ./free5gc.sh start                # Start containers + provision subscriber
-```
-
-### Full install (setup-free5gc.sh)
-
-```bash
-./setup-free5gc.sh status              # Check all services and UE status
-./setup-free5gc.sh test                # Re-run registration and connectivity tests
-./setup-free5gc.sh logs amf            # View AMF logs (replace 'amf' with any service)
-./setup-free5gc.sh stop                # Stop all services
-./setup-free5gc.sh start [mode]        # Start services (full/minimal/consolidated)
-./setup-free5gc.sh restart             # Restart all services (preserves data)
-./setup-free5gc.sh clean               # Stop and remove all data
-./setup-free5gc.sh install [mode]      # Full install (Docker, GTP5G, free5GC, test)
 ```
 
 ### WebUI

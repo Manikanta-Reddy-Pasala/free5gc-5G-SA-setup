@@ -7,14 +7,10 @@
 # Configs from config-debug/ (debug logging enabled).
 # Logs mounted to ./logs/ for easy access.
 #
-# Prerequisites:
-#   ./build.sh    # Build all binaries from source
-#
-# Run:
-#   ./run.sh      # Start, provision subscriber, verify
-#
-# Or manually:
-#   docker compose -f docker-compose-portable.yaml up -d
+# Usage:
+#   ./free5gc.sh build   # Build all binaries from source
+#   ./free5gc.sh start   # Start, provision subscriber, verify
+#   ./free5gc.sh test    # Test UE registration with NF trace
 # ============================================================
 
 services:

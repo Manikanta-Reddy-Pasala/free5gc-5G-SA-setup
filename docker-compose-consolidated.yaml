@@ -18,8 +18,8 @@
 # Then run:
 #   docker compose -f docker-compose-consolidated.yaml up -d
 #
-# After startup, provision subscriber:
-#   ./scripts/provision-subscriber.sh
+# Or use the unified script:
+#   ./free5gc.sh start   (handles provisioning automatically)
 # ============================================================
 
 

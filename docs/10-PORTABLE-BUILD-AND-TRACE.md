@@ -290,17 +290,6 @@ Mode is auto-detected by `./free5gc.sh start`.
 | `logs/upf/` | UPF log files mounted from container |
 | `logs/trace-*/` | Test traces and raw per-NF logs |
 
-### Legacy Scripts (still available)
-
-| File | What It Does |
-|------|-------------|
-| `build.sh` | Standalone build orchestrator (superseded by `free5gc.sh build`) |
-| `run.sh` | Standalone run + provision (superseded by `free5gc.sh start`) |
-| `scripts/provision-subscriber.sh` | Standalone subscriber provisioning |
-| `scripts/trace-registration-flow.sh` | Standalone registration trace |
-| `scripts/ue-flow-trace.sh` | Advanced flow tracing with 3 test scenarios |
-| `scripts/ue-simulation-test.sh` | Full UE simulation test suite |
-
 ---
 
 ## 8. Troubleshooting
