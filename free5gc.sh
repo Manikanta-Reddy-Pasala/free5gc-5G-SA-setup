@@ -1050,27 +1050,27 @@ cmd_test_full() {
         log_fail "Only $unique_pdu_ues/$ATTACH_COUNT UEs got PDU sessions"
     fi
 
-    # Per-UE summary table
+    # Per-UE summary table (use AMF logs which contain per-UE SUPI)
+    local amf_new_logs
+    amf_new_logs=$(docker exec free5gc-cp tail -n "+$((LOG_POS_amf + 1))" /var/log/free5gc/amf.log 2>/dev/null || true)
+
     echo ""
     echo -e "${BOLD}  UE#   IMSI                          Status        PDU${NC}"
     echo "  ----  ----------------------------  ------------  --------"
     for ((i = 1; i <= ATTACH_COUNT; i++)); do
         local imsi
         imsi=$(format_imsi "$i")
-        local imsi_suffix
-        imsi_suffix=$(printf "%010d" "$i")
-        local suci_pattern="suci-0-${MCC}-${MNC}-0000-0-0-${imsi_suffix}"
 
         local status="${RED}NO_ATTEMPT${NC}"
         local pdu="-"
-        if echo "$gnb_logs" | grep -q "MobileIdentity5GS: SUCI\[${suci_pattern}\]" 2>/dev/null; then
-            if echo "$gnb_logs" | grep -q "Send Registration Accept" 2>/dev/null; then
+        # AMF logs contain [supi:SUPI:imsi-...] per UE
+        if echo "$amf_new_logs" | grep -q "supi:SUPI:${imsi}" 2>/dev/null; then
+            if echo "$amf_new_logs" | grep "supi:SUPI:${imsi}" | grep -q "Handle InitialRegistration\|ContextSetup" 2>/dev/null; then
                 status="${GREEN}REGISTERED${NC}"
-                # Check PDU sessions for this UE range
-                if echo "$gnb_logs" | grep -q "PDU session resource(s) setup for UE\[$i\]" 2>/dev/null; then
+                if echo "$amf_new_logs" | grep "supi:SUPI:${imsi}" | grep -q "create smContext" 2>/dev/null; then
                     pdu="${GREEN}YES${NC}"
                 else
-                    pdu="${YELLOW}?${NC}"
+                    pdu="${YELLOW}NO${NC}"
                 fi
             else
                 status="${YELLOW}ATTEMPTED${NC}"
