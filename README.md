@@ -42,7 +42,14 @@ Auto-detects mode: Linux with gtp5g kernel module runs full mode (4 containers i
 ./free5gc.sh build --quick        # Rebuild runtime images only (skip source compile)
 ./free5gc.sh start                # Start containers + provision subscriber
 ./free5gc.sh test                 # 1 UE registration + full NF flow trace
-./free5gc.sh test full            # 16 attach + 200 reject + 100 identify + trace
+./free5gc.sh test --trace         # Same + tshark packet capture + webShark viewer
+./free5gc.sh test full --trace    # 16 attach + 200 reject + 100 identify + pcap
+./free5gc.sh trace list           # List all saved pcap traces
+./free5gc.sh trace view [name]    # Decode & show trace payloads in terminal
+./free5gc.sh trace open [name]    # Open trace in webShark browser UI
+./free5gc.sh trace rename old new # Rename a trace
+./free5gc.sh trace import f.pcap  # Import external pcap into trace store
+./free5gc.sh trace delete name    # Delete a trace
 ./free5gc.sh stop                 # Stop and remove all containers
 ./free5gc.sh status               # Show container status
 ./free5gc.sh logs [nf]            # Tail logs (all or specific NF like amf, smf)
@@ -935,11 +942,36 @@ UE ──(Uu)──> gNB ──(N2/SCTP)──> AMF ──(SBI/HTTP2)──> Oth
 
 ```bash
 ./free5gc.sh status               # Show container status
-./free5gc.sh test                 # 1 UE registration + trace
-./free5gc.sh test full            # 16 UE attach + 200 UE reject + trace
+./free5gc.sh test --trace         # 1 UE registration + pcap capture + webShark
+./free5gc.sh test full --trace    # 16 UE attach + 200 UE reject + pcap capture
+./free5gc.sh trace list           # List saved traces with packet counts
+./free5gc.sh trace view [name]    # Decode NGAP/NAS/PFCP/GTP payloads in terminal
+./free5gc.sh trace open [name]    # Open in webShark browser UI (port 8085)
+./free5gc.sh trace rename old new # Rename a trace for archiving
 ./free5gc.sh logs amf             # View AMF logs (or: smf, ausf, udm, udr, etc.)
 ./free5gc.sh stop                 # Stop and remove all containers
 ./free5gc.sh start                # Start containers + provision subscriber
+```
+
+### Trace Workflow
+
+```bash
+# 1. Run test with packet capture
+./free5gc.sh test --trace
+
+# 2. View decoded signaling flow in terminal
+./free5gc.sh trace view 01-single-ue-registration
+#   Shows: NGAP messages (gNB <-> AMF), NAS-5GS payloads,
+#          PFCP session lifecycle (SMF <-> UPF), GTP-U tunnels
+
+# 3. Rename for archiving
+./free5gc.sh trace rename 01-single-ue-registration prod-baseline-feb11
+
+# 4. Open in browser (webShark on port 8085)
+./free5gc.sh trace open prod-baseline-feb11
+
+# 5. Import external pcap
+./free5gc.sh trace import /tmp/external-capture.pcap my-trace-name
 ```
 
 ### WebUI
