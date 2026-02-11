@@ -72,6 +72,7 @@ PCAP_DIR="${SCRIPT_DIR}/logs/pcap-traces"
 WEBSHARK_PORT=8085
 CAPTURE_IF="br-free5gc"
 TSHARK_PID=0
+SBI_TSHARK_PID=0
 
 # Remote host detection for trace commands
 # Set FREE5GC_HOST to run trace commands on a remote VM via SSH
@@ -104,11 +105,10 @@ format_imsi() {
 }
 
 detect_mode() {
-    if [ "$(uname -s)" = "Linux" ] && lsmod 2>/dev/null | grep -q gtp5g; then
-        echo "full"
-    else
-        echo "cp-only"
-    fi
+    # Always run full mode — UPF runs in Docker on the target VM
+    # The gtp5g kernel module must be installed on the Docker host (VM),
+    # not on the machine running this script
+    echo "full"
 }
 
 wait_healthy() {
@@ -719,35 +719,88 @@ start_capture() {
     if ! $TRACE_ENABLED; then return; fi
     local name="$1"
     local pcap_file="${PCAP_DIR}/${name}.pcap"
+    local sbi_pcap_file="${PCAP_DIR}/${name}-sbi.pcap"
     mkdir -p "$PCAP_DIR"
 
     # Kill any leftover tshark
     pkill -f "tshark.*${CAPTURE_IF}" 2>/dev/null || true
+    pkill -f "tshark.*sbi" 2>/dev/null || true
     sleep 1
 
     # Ensure pcap dir is writable (webShark may chown to node user)
     chmod 777 "$PCAP_DIR" 2>/dev/null || true
 
+    # Capture 1: Bridge interface — NGAP (SCTP), PFCP (UDP 8805), GTP-U (UDP 2152)
     tshark -i "$CAPTURE_IF" -w "$pcap_file" \
         -f "sctp or udp port 8805 or udp port 2152" \
         -q </dev/null >/dev/null 2>&1 &
     TSHARK_PID=$!
+
+    # Capture 2: SBI/HTTP2 traffic between NFs on loopback inside free5gc-cp container
+    # NF SBI ports: NRF=8000, UDR=8001, UDM=8002, AUSF=8003, NSSF=8004, PCF=8005, AMF=8006, SMF=8007
+    local cp_pid
+    cp_pid=$(docker inspect --format '{{.State.Pid}}' free5gc-cp 2>/dev/null || echo "")
+    if [ -n "$cp_pid" ] && [ "$cp_pid" != "0" ]; then
+        nsenter -t "$cp_pid" -n tshark -i lo -w "$sbi_pcap_file" \
+            -f "tcp portrange 8000-8007" \
+            -q </dev/null >/dev/null 2>&1 &
+        SBI_TSHARK_PID=$!
+    else
+        log "WARNING: Could not get free5gc-cp PID for SBI capture"
+        SBI_TSHARK_PID=0
+    fi
+
     sleep 2
 
     if kill -0 "$TSHARK_PID" 2>/dev/null; then
         log "Packet capture started: $pcap_file (PID: $TSHARK_PID)"
     else
-        log "WARNING: Failed to start tshark capture"
+        log "WARNING: Failed to start bridge capture"
         TSHARK_PID=0
+    fi
+
+    if [ "$SBI_TSHARK_PID" -ne 0 ] && kill -0 "$SBI_TSHARK_PID" 2>/dev/null; then
+        log "SBI capture started: $sbi_pcap_file (PID: $SBI_TSHARK_PID)"
+    else
+        if [ "$SBI_TSHARK_PID" -ne 0 ]; then
+            log "WARNING: Failed to start SBI capture"
+            SBI_TSHARK_PID=0
+        fi
     fi
 }
 
 stop_capture() {
-    if ! $TRACE_ENABLED || [ "$TSHARK_PID" -eq 0 ]; then return; fi
-    kill "$TSHARK_PID" 2>/dev/null
-    wait "$TSHARK_PID" 2>/dev/null || true
-    TSHARK_PID=0
+    if ! $TRACE_ENABLED; then return; fi
+
+    # Stop bridge capture
+    if [ "$TSHARK_PID" -ne 0 ]; then
+        kill "$TSHARK_PID" 2>/dev/null
+        wait "$TSHARK_PID" 2>/dev/null || true
+        TSHARK_PID=0
+    fi
+
+    # Stop SBI capture
+    if [ "$SBI_TSHARK_PID" -ne 0 ]; then
+        kill "$SBI_TSHARK_PID" 2>/dev/null
+        wait "$SBI_TSHARK_PID" 2>/dev/null || true
+        SBI_TSHARK_PID=0
+    fi
+
     sleep 1
+
+    # Merge bridge + SBI pcaps into a single combined file
+    for sbi_file in "${PCAP_DIR}"/*-sbi.pcap; do
+        [ -f "$sbi_file" ] || continue
+        local base_file="${sbi_file%-sbi.pcap}.pcap"
+        [ -f "$base_file" ] || continue
+        local merged_file="${base_file%.pcap}-merged.pcap"
+        if mergecap -w "$merged_file" "$base_file" "$sbi_file" 2>/dev/null; then
+            mv "$merged_file" "$base_file"
+            rm -f "$sbi_file"
+            log "Merged SBI traffic into $(basename "$base_file")"
+        fi
+    done
+
     # Make pcap files readable by webShark container (runs as node user)
     chmod 644 "${PCAP_DIR}"/*.pcap 2>/dev/null || true
 }
@@ -873,6 +926,56 @@ decode_capture() {
         printf "  %8ss  %-14s  %s\n" "$ts" "$dir" "$info"
         printf "  %8ss  %-14s  %s\n" "$ts" "$dir" "$info" >> "$trace_file"
     done
+
+    # SBI/HTTP2 summary (NF-to-NF service calls)
+    local HTTP2_DECODE="-d tcp.port==8000,http2 -d tcp.port==8001,http2 -d tcp.port==8002,http2 -d tcp.port==8003,http2 -d tcp.port==8004,http2 -d tcp.port==8005,http2 -d tcp.port==8006,http2 -d tcp.port==8007,http2"
+    local sbi_count
+    sbi_count=$(tshark -r "$pcap_file" $HTTP2_DECODE -Y "http2.header.name == \":method\"" 2>/dev/null | wc -l)
+    if [ "$sbi_count" -gt 0 ]; then
+        echo ""
+        echo -e "${CYAN}================================================================${NC}"
+        echo -e "${CYAN}  WIRE TRACE: SBI/HTTP2 (NF <-> NF) — $sbi_count requests${NC}"
+        echo -e "${CYAN}================================================================${NC}"
+        echo ""
+        {
+            echo ""
+            echo "WIRE TRACE: SBI/HTTP2 (NF <-> NF) — $sbi_count requests"
+            echo "======================================================="
+        } >> "$trace_file"
+
+        printf "  %-10s  %-14s  %-6s  %s\n" "TIME" "DIRECTION" "METHOD" "PATH"
+        printf "  %-10s  %-14s  %-6s  %s\n" "----------" "--------------" "------" "----------------------------------------"
+
+        tshark -r "$pcap_file" $HTTP2_DECODE \
+            -Y "http2.header.name == \":method\"" \
+            -T fields \
+            -e frame.time_relative -e tcp.srcport -e tcp.dstport \
+            -e http2.headers.method -e http2.headers.path \
+            -E separator='|' 2>/dev/null | while IFS='|' read -r ts srcport dstport method path; do
+            [ -z "$method" ] || [ -z "$path" ] && continue
+            local target_nf=""
+            case "$dstport" in
+                8000) target_nf="NRF"  ;; 8001) target_nf="UDR"  ;;
+                8002) target_nf="UDM"  ;; 8003) target_nf="AUSF" ;;
+                8004) target_nf="NSSF" ;; 8005) target_nf="PCF"  ;;
+                8006) target_nf="AMF"  ;; 8007) target_nf="SMF"  ;;
+            esac
+            [ -z "$target_nf" ] && continue
+            local source_nf="???"
+            case "$srcport" in
+                8000) source_nf="NRF"  ;; 8001) source_nf="UDR"  ;;
+                8002) source_nf="UDM"  ;; 8003) source_nf="AUSF" ;;
+                8004) source_nf="NSSF" ;; 8005) source_nf="PCF"  ;;
+                8006) source_nf="AMF"  ;; 8007) source_nf="SMF"  ;;
+            esac
+            local dir="${source_nf} -> ${target_nf}"
+            # Trim long paths
+            local display_path="$path"
+            [ ${#display_path} -gt 80 ] && display_path="${display_path:0:77}..."
+            printf "  %8ss  %-14s  %-6s  %s\n" "$ts" "$dir" "$method" "$display_path"
+            printf "  %8ss  %-14s  %-6s  %s\n" "$ts" "$dir" "$method" "$display_path" >> "$trace_file"
+        done
+    fi
 }
 
 setup_webshark() {
@@ -1347,6 +1450,72 @@ trace_view() {
         [ "$gtp_count" -gt 20 ] && echo "  ... ($gtp_count total GTP-U packets)"
     fi
 
+    # ── SBI/HTTP2 Messages (NF-to-NF service calls) ──
+    # NF SBI port mapping: NRF=8000, UDR=8001, UDM=8002, AUSF=8003, NSSF=8004, PCF=8005, AMF=8006, SMF=8007
+    local HTTP2_DECODE="-d tcp.port==8000,http2 -d tcp.port==8001,http2 -d tcp.port==8002,http2 -d tcp.port==8003,http2 -d tcp.port==8004,http2 -d tcp.port==8005,http2 -d tcp.port==8006,http2 -d tcp.port==8007,http2"
+
+    local sbi_count
+    sbi_count=$(tshark -r "$pcap_file" $HTTP2_DECODE -Y "http2.header.name == \":method\"" 2>/dev/null | wc -l)
+    if [ "$sbi_count" -gt 0 ]; then
+        echo ""
+        echo -e "${CYAN}──── SBI/HTTP2 (NF <-> NF Service Calls) ────${NC}"
+        echo ""
+        printf "  ${BOLD}%-10s  %-14s  %-6s  %s${NC}\n" "TIME" "DIRECTION" "METHOD" "PATH"
+        printf "  %-10s  %-14s  %-6s  %s\n" "----------" "--------------" "------" "--------------------------------------------"
+
+        # Map port to NF name
+        port_to_nf() {
+            case "$1" in
+                8000) echo "NRF"  ;; 8001) echo "UDR"  ;;
+                8002) echo "UDM"  ;; 8003) echo "AUSF" ;;
+                8004) echo "NSSF" ;; 8005) echo "PCF"  ;;
+                8006) echo "AMF"  ;; 8007) echo "SMF"  ;;
+                *) echo ""        ;;
+            esac
+        }
+
+        tshark -r "$pcap_file" $HTTP2_DECODE \
+            -Y "http2.header.name == \":method\"" \
+            -T fields \
+            -e frame.time_relative -e tcp.srcport -e tcp.dstport \
+            -e http2.headers.method -e http2.headers.path \
+            -E separator='|' 2>/dev/null | while IFS='|' read -r ts srcport dstport method path; do
+            [ -z "$method" ] || [ -z "$path" ] && continue
+
+            local target_nf
+            target_nf=$(port_to_nf "$dstport")
+            [ -z "$target_nf" ] && continue  # Skip responses (dstport is ephemeral)
+
+            # Determine caller by checking if srcport is a known NF
+            local source_nf
+            source_nf=$(port_to_nf "$srcport")
+            [ -z "$source_nf" ] && source_nf="???"
+
+            local dir="${source_nf} -> ${target_nf}"
+
+            # Color by service type
+            local color="$NC"
+            case "$path" in
+                /oauth2/*) color="$YELLOW" ;;
+                /nnrf-*) color="$CYAN" ;;
+                /nausf-*) color="$GREEN" ;;
+                /nudm-*) color="$MAGENTA" ;;
+                /nudr-*) color="$BLUE" ;;
+                /nsmf-*) color="$RED" ;;
+                /npcf-*) color="$YELLOW" ;;
+                /namf-*) color="$GREEN" ;;
+            esac
+
+            # Trim query strings for cleaner display (keep first 80 chars)
+            local display_path="$path"
+            if [ ${#display_path} -gt 80 ]; then
+                display_path="${display_path:0:77}..."
+            fi
+
+            printf "  %8ss  ${color}%-14s${NC}  %-6s  ${color}%s${NC}\n" "$ts" "$dir" "$method" "$display_path"
+        done
+    fi
+
     # ── Summary ──
     echo ""
     echo -e "${CYAN}──── Summary ────${NC}"
@@ -1360,6 +1529,7 @@ trace_view() {
     printf "  %-30s  %s\n" "NAS-5GS messages:" "$nas_count"
     printf "  %-30s  %s\n" "PFCP messages (excl HB):" "$pfcp_count"
     printf "  %-30s  %s\n" "GTP-U packets:" "$gtp_count"
+    printf "  %-30s  %s\n" "SBI/HTTP2 requests:" "$sbi_count"
     echo ""
 }
 
@@ -1529,20 +1699,11 @@ cmd_build() {
 }
 
 cmd_start() {
-    local mode
-    mode=$(detect_mode)
-    log "Detected mode: $mode"
-
     mkdir -p logs/cp logs/upf
 
-    # Start containers
+    # Start all containers (CP + UPF + UERANSIM)
     log "Step 1/4: Starting containers..."
-    if [ "$mode" = "cp-only" ]; then
-        log "  CP-only mode: skipping UPF (no gtp5g kernel module)"
-        docker compose -f "$COMPOSE_FILE" up -d db free5gc-cp ueransim
-    else
-        docker compose -f "$COMPOSE_FILE" up -d
-    fi
+    docker compose -f "$COMPOSE_FILE" up -d
 
     # Wait for CP health
     log "Step 2/4: Waiting for Control Plane to be healthy..."
