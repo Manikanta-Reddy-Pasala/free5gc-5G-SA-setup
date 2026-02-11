@@ -961,15 +961,36 @@ decode_capture() {
                 8006) target_nf="AMF"  ;; 8007) target_nf="SMF"  ;;
             esac
             [ -z "$target_nf" ] && continue
-            local source_nf="???"
+            local source_nf=""
             case "$srcport" in
                 8000) source_nf="NRF"  ;; 8001) source_nf="UDR"  ;;
                 8002) source_nf="UDM"  ;; 8003) source_nf="AUSF" ;;
                 8004) source_nf="NSSF" ;; 8005) source_nf="PCF"  ;;
                 8006) source_nf="AMF"  ;; 8007) source_nf="SMF"  ;;
             esac
-            local dir="${source_nf} -> ${target_nf}"
-            # Trim long paths
+            if [ -z "$source_nf" ]; then
+                if [[ "$path" == *"requester-nf-type=AMF"* ]]; then source_nf="AMF"
+                elif [[ "$path" == *"requester-nf-type=SMF"* ]]; then source_nf="SMF"
+                elif [[ "$path" == *"requester-nf-type=AUSF"* ]]; then source_nf="AUSF"
+                elif [[ "$path" == *"requester-nf-type=UDM"* ]]; then source_nf="UDM"
+                elif [[ "$path" == *"requester-nf-type=PCF"* ]]; then source_nf="PCF"
+                elif [[ "$path" == /nausf-* ]]; then source_nf="AMF"
+                elif [[ "$path" == /nudm-ueau/* ]]; then source_nf="AUSF"
+                elif [[ "$path" == /nudm-sdm/* ]]; then source_nf="SMF"
+                elif [[ "$path" == /nudr-* ]]; then
+                    case "$path" in
+                        *authentication*) source_nf="UDM" ;; *policy*|*influence*) source_nf="PCF" ;;
+                        *) source_nf="UDM" ;;
+                    esac
+                elif [[ "$path" == /nsmf-* ]]; then source_nf="AMF"
+                elif [[ "$path" == /namf-* ]]; then source_nf="SMF"
+                elif [[ "$path" == /npcf-am-* ]]; then source_nf="AMF"
+                elif [[ "$path" == /npcf-sm* ]]; then source_nf="SMF"
+                elif [[ "$path" == /nnssf-* ]]; then source_nf="AMF"
+                elif [[ "$path" == /oauth2/* ]]; then source_nf="NF"
+                fi
+            fi
+            local dir="${source_nf:-?} -> ${target_nf}"
             local display_path="$path"
             [ ${#display_path} -gt 80 ] && display_path="${display_path:0:77}..."
             printf "  %8ss  %-14s  %-6s  %s\n" "$ts" "$dir" "$method" "$display_path"
@@ -1492,17 +1513,6 @@ trace_view() {
         printf "  ${BOLD}%-10s  %-14s  %-6s  %s${NC}\n" "TIME" "DIRECTION" "METHOD" "PATH"
         printf "  %-10s  %-14s  %-6s  %s\n" "----------" "--------------" "------" "--------------------------------------------"
 
-        # Map port to NF name
-        port_to_nf() {
-            case "$1" in
-                8000) echo "NRF"  ;; 8001) echo "UDR"  ;;
-                8002) echo "UDM"  ;; 8003) echo "AUSF" ;;
-                8004) echo "NSSF" ;; 8005) echo "PCF"  ;;
-                8006) echo "AMF"  ;; 8007) echo "SMF"  ;;
-                *) echo ""        ;;
-            esac
-        }
-
         tshark -r "$pcap_file" $HTTP2_DECODE \
             -Y "http2.header.name == \":method\"" \
             -T fields \
@@ -1511,16 +1521,54 @@ trace_view() {
             -E separator='|' 2>/dev/null | while IFS='|' read -r ts srcport dstport method path; do
             [ -z "$method" ] || [ -z "$path" ] && continue
 
-            local target_nf
-            target_nf=$(port_to_nf "$dstport")
-            [ -z "$target_nf" ] && continue  # Skip responses (dstport is ephemeral)
+            # Map dest port to target NF
+            local target_nf=""
+            case "$dstport" in
+                8000) target_nf="NRF"  ;; 8001) target_nf="UDR"  ;;
+                8002) target_nf="UDM"  ;; 8003) target_nf="AUSF" ;;
+                8004) target_nf="NSSF" ;; 8005) target_nf="PCF"  ;;
+                8006) target_nf="AMF"  ;; 8007) target_nf="SMF"  ;;
+            esac
+            [ -z "$target_nf" ] && continue
 
-            # Determine caller by checking if srcport is a known NF
-            local source_nf
-            source_nf=$(port_to_nf "$srcport")
-            [ -z "$source_nf" ] && source_nf="???"
+            # Infer caller NF from API path and known 5G SBI call chains
+            local source_nf=""
+            case "$srcport" in
+                8000) source_nf="NRF"  ;; 8001) source_nf="UDR"  ;;
+                8002) source_nf="UDM"  ;; 8003) source_nf="AUSF" ;;
+                8004) source_nf="NSSF" ;; 8005) source_nf="PCF"  ;;
+                8006) source_nf="AMF"  ;; 8007) source_nf="SMF"  ;;
+            esac
+            if [ -z "$source_nf" ]; then
+                # Infer from requester-nf-type in NRF discovery URLs
+                if [[ "$path" == *"requester-nf-type=AMF"* ]]; then source_nf="AMF"
+                elif [[ "$path" == *"requester-nf-type=SMF"* ]]; then source_nf="SMF"
+                elif [[ "$path" == *"requester-nf-type=AUSF"* ]]; then source_nf="AUSF"
+                elif [[ "$path" == *"requester-nf-type=UDM"* ]]; then source_nf="UDM"
+                elif [[ "$path" == *"requester-nf-type=PCF"* ]]; then source_nf="PCF"
+                elif [[ "$path" == *"requester-nf-type=NSSF"* ]]; then source_nf="NSSF"
+                # Infer from target service API
+                elif [[ "$path" == /nausf-* ]]; then source_nf="AMF"
+                elif [[ "$path" == /nudm-ueau/* ]]; then source_nf="AUSF"
+                elif [[ "$path" == /nudm-sdm/* ]]; then source_nf="SMF"
+                elif [[ "$path" == /nudm-ee/* ]]; then source_nf="AMF"
+                elif [[ "$path" == /nudr-* ]]; then
+                    case "$path" in
+                        *authentication*) source_nf="UDM" ;;
+                        *policy*|*influence*) source_nf="PCF" ;;
+                        *sm-data*|*provisioned*|*sdm-subscript*) source_nf="UDM" ;;
+                        *) source_nf="UDM" ;;
+                    esac
+                elif [[ "$path" == /nsmf-* ]]; then source_nf="AMF"
+                elif [[ "$path" == /namf-* ]]; then source_nf="SMF"
+                elif [[ "$path" == /npcf-am-* ]]; then source_nf="AMF"
+                elif [[ "$path" == /npcf-sm* ]]; then source_nf="SMF"
+                elif [[ "$path" == /nnssf-* ]]; then source_nf="AMF"
+                elif [[ "$path" == /oauth2/* ]]; then source_nf="NF"
+                fi
+            fi
 
-            local dir="${source_nf} -> ${target_nf}"
+            local dir="${source_nf:-?} -> ${target_nf}"
 
             # Color by service type
             local color="$NC"
