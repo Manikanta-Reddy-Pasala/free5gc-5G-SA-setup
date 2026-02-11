@@ -17,6 +17,7 @@
 #   ./free5gc.sh trace view [name]    # Decode & show trace payloads in terminal
 #   ./free5gc.sh trace open [name]    # Open trace in webShark browser UI
 #   ./free5gc.sh trace rename old new # Rename a trace
+#   FREE5GC_HOST=root@ip ./free5gc.sh trace list  # Run on remote VM
 #   ./free5gc.sh stop                 # Stop and remove all containers
 #   ./free5gc.sh status               # Show container status
 #   ./free5gc.sh logs [nf]            # Tail logs (all or specific NF)
@@ -71,6 +72,12 @@ PCAP_DIR="${SCRIPT_DIR}/logs/pcap-traces"
 WEBSHARK_PORT=8085
 CAPTURE_IF="br-free5gc"
 TSHARK_PID=0
+
+# Remote host detection for trace commands
+# Set FREE5GC_HOST to run trace commands on a remote VM via SSH
+# Auto-detected if containers aren't running locally
+FREE5GC_HOST="${FREE5GC_HOST:-}"
+REMOTE_SCRIPT_DIR="/root/free5gc-5G-SA-setup"
 
 # ── Helpers ─────────────────────────────────────────────────
 
@@ -979,8 +986,50 @@ ensure_webshark() {
     fi
 }
 
+detect_remote_host() {
+    # Already set explicitly via env var
+    [ -n "$FREE5GC_HOST" ] && return 0
+
+    # If containers are running locally, we're on the right host
+    if docker ps --format '{{.Names}}' 2>/dev/null | grep -q '^free5gc-cp$'; then
+        return 1  # local, no remote needed
+    fi
+
+    # If local pcap dir has files, we're on the right host
+    if ls "${PCAP_DIR}"/*.pcap &>/dev/null; then
+        return 1  # local
+    fi
+
+    # Check for .free5gc-host file in repo root (e.g., "root@135.181.93.114")
+    if [ -f "${SCRIPT_DIR}/.free5gc-host" ]; then
+        local host_line
+        host_line=$(head -1 "${SCRIPT_DIR}/.free5gc-host" | tr -d '[:space:]')
+        if [ -n "$host_line" ]; then
+            if ssh -o ConnectTimeout=5 -o BatchMode=yes "$host_line" "test -f ${REMOTE_SCRIPT_DIR}/free5gc.sh" 2>/dev/null; then
+                FREE5GC_HOST="$host_line"
+                return 0
+            fi
+        fi
+    fi
+
+    return 1  # no remote host found, run locally
+}
+
+run_trace_remote() {
+    # Execute the trace subcommand on the remote host via SSH
+    log "Running on remote host: $FREE5GC_HOST"
+    ssh "$FREE5GC_HOST" "cd ${REMOTE_SCRIPT_DIR} && ./free5gc.sh trace $*"
+}
+
 cmd_trace() {
     local subcmd="${1:-list}"
+
+    # Detect if we need to run on a remote host
+    if detect_remote_host; then
+        run_trace_remote "$@"
+        return $?
+    fi
+
     shift 2>/dev/null || true
 
     case "$subcmd" in
@@ -1013,12 +1062,14 @@ cmd_trace() {
             echo "  import <file.pcap>       Import external pcap into traces"
             echo "  delete <name>            Delete a trace"
             echo ""
+            echo "Set FREE5GC_HOST=root@<ip> to run on a remote VM."
+            echo ""
             echo "Examples:"
             echo "  ./free5gc.sh trace list"
             echo "  ./free5gc.sh trace rename full-test ue-attach-16-prod"
             echo "  ./free5gc.sh trace view 01-single-ue-registration"
             echo "  ./free5gc.sh trace open full-test"
-            echo "  ./free5gc.sh trace import /tmp/external-capture.pcap"
+            echo "  FREE5GC_HOST=root@1.2.3.4 ./free5gc.sh trace list"
             ;;
     esac
 }
