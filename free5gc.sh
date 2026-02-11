@@ -992,6 +992,15 @@ tcp.port,8005,(none),http2
 tcp.port,8006,(none),http2
 tcp.port,8007,(none),http2
 DECEOF' 2>/dev/null
+    # Enable HTTP2 body reassembly so JSON payloads render as text
+    docker exec webshark sh -c 'cat > /root/.config/wireshark/preferences <<PREFEOF
+http2.reassemble_body: TRUE
+http2.reassemble_continuations: TRUE
+http.decompress_body: TRUE
+http.desegment_body: TRUE
+http.desegment_headers: TRUE
+json.compact_form: FALSE
+PREFEOF' 2>/dev/null
 }
 
 setup_webshark() {
