@@ -978,6 +978,22 @@ decode_capture() {
     fi
 }
 
+configure_webshark_decode() {
+    # Inject decode_as_entries so sharkd decodes SBI ports as HTTP2
+    docker exec webshark mkdir -p /root/.config/wireshark 2>/dev/null || true
+    docker exec webshark sh -c 'cat > /root/.config/wireshark/decode_as_entries <<DECEOF
+# Decode NF SBI ports as HTTP2: NRF=8000 UDR=8001 UDM=8002 AUSF=8003 NSSF=8004 PCF=8005 AMF=8006 SMF=8007
+tcp.port,8000,(none),http2
+tcp.port,8001,(none),http2
+tcp.port,8002,(none),http2
+tcp.port,8003,(none),http2
+tcp.port,8004,(none),http2
+tcp.port,8005,(none),http2
+tcp.port,8006,(none),http2
+tcp.port,8007,(none),http2
+DECEOF' 2>/dev/null
+}
+
 setup_webshark() {
     if ! $TRACE_ENABLED; then return; fi
 
@@ -992,6 +1008,7 @@ setup_webshark() {
     # Check if webshark container already running
     if docker ps --format '{{.Names}}' | grep -q '^webshark$'; then
         log "webShark already running on port $WEBSHARK_PORT"
+        configure_webshark_decode
     else
         # Remove stopped container if exists
         docker rm -f webshark 2>/dev/null || true
@@ -1008,6 +1025,7 @@ setup_webshark() {
             sleep 3
             if docker ps --format '{{.Names}}' | grep -q '^webshark$'; then
                 log "webShark started on port $WEBSHARK_PORT"
+                configure_webshark_decode
             else
                 log "WARNING: webShark failed to start (pcap decode still works)"
             fi
@@ -1049,7 +1067,7 @@ show_pcap_summary() {
                 echo -e "  ${BOLD}  http://${vm_ip}:${WEBSHARK_PORT}${NC}"
                 echo ""
                 echo "  Select a .pcap file from the list to view decoded protocols"
-                echo "  (NGAP, NAS-5GS, PFCP, GTP-U fully decoded)"
+                echo "  (NGAP, NAS-5GS, PFCP, GTP-U, SBI/HTTP2 fully decoded)"
             fi
         fi
 
@@ -1067,6 +1085,7 @@ show_pcap_summary() {
 ensure_webshark() {
     # Start webshark if not running (without requiring --trace flag)
     if docker ps --format '{{.Names}}' | grep -q '^webshark$'; then
+        configure_webshark_decode
         return 0
     fi
     docker rm -f webshark 2>/dev/null || true
@@ -1082,6 +1101,7 @@ ensure_webshark() {
     sleep 3
     if docker ps --format '{{.Names}}' | grep -q '^webshark$'; then
         log "webShark started on port $WEBSHARK_PORT"
+        configure_webshark_decode
         return 0
     else
         log "ERROR: webShark failed to start"
