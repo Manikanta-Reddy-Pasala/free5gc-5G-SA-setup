@@ -18,8 +18,8 @@ configuration:
       key: cert/nrf.key
     oauth: true
   DefaultPlmnId:
-    mcc: 208
-    mnc: 93
+    mcc: 001
+    mnc: 01
   serviceNameList:
     - nnrf-nfm
     - nnrf-disc

@@ -16,10 +16,8 @@ configuration:
   nrfUri: http://10.100.200.16:8000
   nrfCertPem: cert/nrf.pem
   plmnSupportList:
-    - mcc: 208
-      mnc: 93
-    - mcc: 123
-      mnc: 45
+    - mcc: 001
+      mnc: 01
   groupId: ausfGroup001
   eapAkaSupiImsiPrefix: false
   metrics:
