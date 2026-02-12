@@ -53,6 +53,8 @@ services:
     environment:
       DB_URI: mongodb://db/free5gc
       GIN_MODE: release
+    ports:
+      - "38412:38412/sctp"
     networks:
       privnet:
         ipv4_address: 10.100.200.16
