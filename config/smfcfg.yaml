@@ -6,9 +6,9 @@ configuration:
   smfName: SMF # the name of this SMF
   sbi: # Service-based interface information
     scheme: http # the protocol for sbi (http or https)
-    registerIPv4: smf.free5gc.org # IP used to register to NRF
-    bindingIPv4: smf.free5gc.org # IP used to bind the service
-    port: 8000 # Port used to bind the service
+    registerIPv4: 10.100.200.16 # IP used to register to NRF
+    bindingIPv4: 0.0.0.0 # IP used to bind the service
+    port: 8007 # Port used to bind the service
     tls: # the local path of TLS key
       key: cert/smf.key # SMF TLS Certificate
       pem: cert/smf.pem # SMF TLS Private key
@@ -17,6 +17,14 @@ configuration:
     - nsmf-event-exposure # Nsmf_EventExposure service
     - nsmf-oam # OAM service
   snssaiInfos: # the S-NSSAI (Single Network Slice Selection Assistance Information) list supported by this AMF
+    - sNssai: # S-NSSAI (Single Network Slice Selection Assistance Information)
+        sst: 3 # Slice/Service Type (uinteger, range: 0~255)
+        sd: 198153 # Slice Differentiator (3 bytes hex string, range: 000000~FFFFFF)
+      dnnInfos: # DNN information list
+        - dnn: internet # Data Network Name
+          dns: # the IP address of DNS
+            ipv4: 8.8.8.8
+            ipv6: 2001:4860:4860::8888
     - sNssai: # S-NSSAI (Single Network Slice Selection Assistance Information)
         sst: 3 # Slice/Service Type (uinteger, range: 0~255)
         sd: 198153 # Slice Differentiator (3 bytes hex string, range: 000000~FFFFFF)
@@ -52,6 +60,15 @@ configuration:
                   - cidr: 10.60.0.0/16
                 staticPools:
                   - cidr: 10.60.100.0/24
+          - sNssai: # S-NSSAI (Single Network Slice Selection Assistance Information)
+              sst: 3 # Slice/Service Type (uinteger, range: 0~255)
+              sd: 198153 # Slice Differentiator (3 bytes hex string, range: 000000~FFFFFF)
+            dnnUpfInfoList: # DNN information list for this S-NSSAI
+              - dnn: internet
+                pools:
+                  - cidr: 10.61.0.0/16
+                staticPools:
+                  - cidr: 10.61.100.0/24
         interfaces: # Interface list for this UPF
           - interfaceType: N3 # the type of the interface (N3 or N9)
             endpoints: # the IP address of this N3/N9 interface on this UPF
@@ -71,7 +88,7 @@ configuration:
     enable: true # true or false
     expireTime: 16s # default is 6 seconds
     maxRetryTimes: 3 # the max number of retransmission
-  nrfUri: http://nrf.free5gc.org:8000 # a valid URI of NRF
+  nrfUri: http://10.100.200.16:8000 # a valid URI of NRF
   nrfCertPem: cert/nrf.pem # NRF Certificate
   urrPeriod: 10 # default usage report period in seconds
   urrThreshold: 1000 # default usage report threshold in bytes
@@ -82,7 +99,7 @@ configuration:
   metrics:
     enable: false # (Optional, default false)
     scheme: http # (Required) the protocol for metrics (http or https, default https)
-    bindingIPv4: smf.free5gc.org # (Required) IP used to bind the metrics endpoint (default 0.0.0.0)
+    bindingIPv4: 0.0.0.0 # (Required) IP used to bind the metrics endpoint (default 0.0.0.0)
     port: 9091 # (Optional, default 9091) port used to bind the service
     tls: # (Optional) the local path of TLS key (Could be the same as the sbi ones)
       pem: cert/smf.pem # SMF TLS Certificate

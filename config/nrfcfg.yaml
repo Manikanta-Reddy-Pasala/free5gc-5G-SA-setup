@@ -7,8 +7,8 @@ configuration:
   MongoDBUrl: mongodb://db:27017 # a valid URL of the mongodb
   sbi: # Service-based interface information
     scheme: http # the protocol for sbi (http or https)
-    registerIPv4: nrf.free5gc.org # IP used to serve NFs or register to another NRF
-    bindingIPv4: nrf.free5gc.org  # IP used to bind the service
+    registerIPv4: 10.100.200.16 # IP used to serve NFs or register to another NRF
+    bindingIPv4: 0.0.0.0  # IP used to bind the service
     port: 8000 # port used to bind the service
     cert: # the local path of TLS key
       pem: cert/nrf.pem # NRF TLS Certificate
@@ -29,7 +29,7 @@ configuration:
   metrics:
     enable: false # (Optional, default false)
     scheme: http # (Required) the protocol for metrics (http or https, default https)
-    bindingIPv4: nrf.free5gc.org # (Required) IP used to bind the metrics endpoint (default 0.0.0.0)
+    bindingIPv4: 0.0.0.0 # (Required) IP used to bind the metrics endpoint (default 0.0.0.0)
     port: 9091 # (Optional, default 9091) port used to bind the service
     tls: # (Optional) the local path of TLS key (Could be the same as the sbi ones)
       pem: cert/nrf.pem # NRF TLS Certificate
