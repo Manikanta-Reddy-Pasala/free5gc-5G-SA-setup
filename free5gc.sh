@@ -10,12 +10,12 @@
 #   ./free5gc.sh build --quick        # Rebuild runtime images only
 #   ./free5gc.sh start                # Start containers + provision subscriber
 #   ./free5gc.sh test                 # 1 UE registration + full NF flow trace
-#   ./free5gc.sh test --trace         # Same + tshark packet capture + webShark viewer
+#   ./free5gc.sh test --trace         # Same + tshark packet capture
 #   ./free5gc.sh test full            # 16 attach + 200 reject + 100 identify + trace
-#   ./free5gc.sh test full --trace    # Same + packet capture + webShark viewer
+#   ./free5gc.sh test full --trace    # Same + packet capture
 #   ./free5gc.sh trace list           # List all saved pcap traces
 #   ./free5gc.sh trace view [name]    # Decode & show trace payloads in terminal
-#   ./free5gc.sh trace open [name]    # Open trace in webShark browser UI
+#   ./free5gc.sh trace open [name]    # List traces and download instructions
 #   ./free5gc.sh trace rename old new # Rename a trace
 #   FREE5GC_HOST=root@ip ./free5gc.sh trace list  # Run on remote VM
 #   ./free5gc.sh stop                 # Stop and remove all containers
@@ -30,12 +30,12 @@ cd "$SCRIPT_DIR"
 
 # ── Constants ───────────────────────────────────────────────
 COMPOSE_FILE="docker-compose-portable.yaml"
-IMSI="imsi-208930000000001"
-PLMN="20893"
-MCC="208"
-MNC="93"
-K="8baf473f2f8fd09487cccbd7097c6862"
-OPC="8e27b6af0e692e750f32667a3b14605d"
+IMSI="imsi-001010000050641"
+PLMN="00101"
+MCC="001"
+MNC="01"
+K="0c57e15a2cb86087097a6b50d42531de"
+OPC="109ee52735ae6d3849112cf4175029c7"
 SQN="000000000020"
 AMF_FIELD="8000"
 WEBUI_IMAGE="free5gc/webui:v4.2.0"
@@ -69,7 +69,6 @@ TOTAL_TESTS=0
 # Packet capture (--trace mode)
 TRACE_ENABLED=false
 PCAP_DIR="${SCRIPT_DIR}/logs/pcap-traces"
-WEBSHARK_PORT=8085
 CAPTURE_IF="br-free5gc"
 TSHARK_PID=0
 SBI_TSHARK_PID=0
@@ -209,23 +208,12 @@ provision_subscriber() {
     \"gpsis\": [\"msisdn-0900000000\"],
     \"subscribedUeAmbr\": {\"downlink\": \"2 Gbps\", \"uplink\": \"1 Gbps\"},
     \"nssai\": {
-      \"defaultSingleNssais\": [{\"sst\": 1, \"sd\": \"010203\"}, {\"sst\": 1, \"sd\": \"112233\"}]
+      \"defaultSingleNssais\": [{\"sst\": 3, \"sd\": \"198153\"}]
     }
   },
   \"SessionManagementSubscriptionData\": [
     {
-      \"singleNssai\": {\"sst\": 1, \"sd\": \"010203\"},
-      \"dnnConfigurations\": {
-        \"internet\": {
-          \"pduSessionTypes\": {\"defaultSessionType\": \"IPV4\"},
-          \"sscModes\": {\"defaultSscMode\": \"SSC_MODE_1\"},
-          \"5gQosProfile\": {\"5qi\": 9, \"arp\": {\"priorityLevel\": 8, \"preemptCap\": \"\", \"preemptVuln\": \"\"}},
-          \"sessionAmbr\": {\"downlink\": \"200 Mbps\", \"uplink\": \"100 Mbps\"}
-        }
-      }
-    },
-    {
-      \"singleNssai\": {\"sst\": 1, \"sd\": \"112233\"},
+      \"singleNssai\": {\"sst\": 3, \"sd\": \"198153\"},
       \"dnnConfigurations\": {
         \"internet\": {
           \"pduSessionTypes\": {\"defaultSessionType\": \"IPV4\"},
@@ -238,8 +226,7 @@ provision_subscriber() {
   ],
   \"SmfSelectionSubscriptionData\": {
     \"subscribedSnssaiInfos\": {
-      \"01010203\": {\"dnnInfos\": [{\"dnn\": \"internet\"}]},
-      \"01112233\": {\"dnnInfos\": [{\"dnn\": \"internet\"}]}
+      \"03198153\": {\"dnnInfos\": [{\"dnn\": \"internet\"}]}
     }
   }
 }")
@@ -268,12 +255,8 @@ db['policyData.ues.smData'].updateOne(
   {
     \$set: {
       smPolicySnssaiData: {
-        '01010203': {
-          snssai: { sst: 1, sd: '010203' },
-          smPolicyDnnData: { internet: { dnn: 'internet' } }
-        },
-        '01112233': {
-          snssai: { sst: 1, sd: '112233' },
+        '03198153': {
+          snssai: { sst: 3, sd: '198153' },
           smPolicyDnnData: { internet: { dnn: 'internet' } }
         }
       }
@@ -311,29 +294,15 @@ provision_subscriber_direct() {
           ueId: '${imsi}', servingPlmnId: '${PLMN}',
           gpsis: ['msisdn-0900000000'],
           subscribedUeAmbr: { downlink: '2 Gbps', uplink: '1 Gbps' },
-          nssai: { defaultSingleNssais: [{ sst: 1, sd: '010203' }, { sst: 1, sd: '112233' }] }
+          nssai: { defaultSingleNssais: [{ sst: 3, sd: '198153' }] }
       }},
       { upsert: true }
     );
     db['subscriptionData.provisionedData.smData'].updateOne(
-      { ueId: '${imsi}', servingPlmnId: '${PLMN}', 'singleNssai.sst': 1, 'singleNssai.sd': '010203' },
+      { ueId: '${imsi}', servingPlmnId: '${PLMN}', 'singleNssai.sst': 3, 'singleNssai.sd': '198153' },
       { \$set: {
           ueId: '${imsi}', servingPlmnId: '${PLMN}',
-          singleNssai: { sst: 1, sd: '010203' },
-          dnnConfigurations: { internet: {
-            pduSessionTypes: { defaultSessionType: 'IPV4', allowedSessionTypes: ['IPV4'] },
-            sscModes: { defaultSscMode: 'SSC_MODE_1' },
-            '5gQosProfile': { '5qi': 9, arp: { priorityLevel: 8, preemptCap: '', preemptVuln: '' } },
-            sessionAmbr: { downlink: '200 Mbps', uplink: '100 Mbps' }
-          }}
-      }},
-      { upsert: true }
-    );
-    db['subscriptionData.provisionedData.smData'].updateOne(
-      { ueId: '${imsi}', servingPlmnId: '${PLMN}', 'singleNssai.sst': 1, 'singleNssai.sd': '112233' },
-      { \$set: {
-          ueId: '${imsi}', servingPlmnId: '${PLMN}',
-          singleNssai: { sst: 1, sd: '112233' },
+          singleNssai: { sst: 3, sd: '198153' },
           dnnConfigurations: { internet: {
             pduSessionTypes: { defaultSessionType: 'IPV4', allowedSessionTypes: ['IPV4'] },
             sscModes: { defaultSscMode: 'SSC_MODE_1' },
@@ -348,8 +317,7 @@ provision_subscriber_direct() {
       { \$set: {
           ueId: '${imsi}', servingPlmnId: '${PLMN}',
           subscribedSnssaiInfos: {
-            '01010203': { dnnInfos: [{ dnn: 'internet' }] },
-            '01112233': { dnnInfos: [{ dnn: 'internet' }] }
+            '03198153': { dnnInfos: [{ dnn: 'internet' }] }
           }
       }},
       { upsert: true }
@@ -359,8 +327,7 @@ provision_subscriber_direct() {
       { \$set: {
           ueId: '${imsi}',
           smPolicySnssaiData: {
-            '01010203': { snssai: { sst: 1, sd: '010203' }, smPolicyDnnData: { internet: { dnn: 'internet' } } },
-            '01112233': { snssai: { sst: 1, sd: '112233' }, smPolicyDnnData: { internet: { dnn: 'internet' } } }
+            '03198153': { snssai: { sst: 3, sd: '198153' }, smPolicyDnnData: { internet: { dnn: 'internet' } } }
           }
       }},
       { upsert: true }
@@ -401,7 +368,7 @@ cleanup_test_data() {
       'policyData.ues.amData'
     ];
     collections.forEach(function(col) {
-      db[col].deleteMany({ ueId: { \$ne: 'imsi-208930000000001' } });
+      db[col].deleteMany({ ueId: { \$ne: 'imsi-001010000050641' } });
     });
     " 2>/dev/null
 }
@@ -702,6 +669,7 @@ render_chronological_flow() {
 
 start_capture() {
     if ! $TRACE_ENABLED; then return; fi
+    check_tshark || return
     local name="$1"
     local pcap_file="${PCAP_DIR}/${name}.pcap"
     local sbi_pcap_file="${PCAP_DIR}/${name}-sbi.pcap"
@@ -712,7 +680,6 @@ start_capture() {
     pkill -f "tshark.*sbi" 2>/dev/null || true
     sleep 1
 
-    # Ensure pcap dir is writable (webShark may chown to node user)
     chmod 777 "$PCAP_DIR" 2>/dev/null || true
 
     # Capture 1: Bridge interface — NGAP (SCTP), PFCP (UDP 8805), GTP-U (UDP 2152)
@@ -786,7 +753,7 @@ stop_capture() {
         fi
     done
 
-    # Make pcap files readable by webShark container (runs as node user)
+    # Make pcap files readable
     chmod 644 "${PCAP_DIR}"/*.pcap 2>/dev/null || true
 }
 
@@ -984,70 +951,14 @@ decode_capture() {
     fi
 }
 
-configure_webshark_decode() {
-    # Inject decode_as_entries so sharkd decodes SBI ports as HTTP2
-    docker exec webshark mkdir -p /root/.config/wireshark 2>/dev/null || true
-    docker exec webshark sh -c 'cat > /root/.config/wireshark/decode_as_entries <<DECEOF
-# Decode NF SBI ports as HTTP2: NRF=8000 UDR=8001 UDM=8002 AUSF=8003 NSSF=8004 PCF=8005 AMF=8006 SMF=8007
-tcp.port,8000,(none),http2
-tcp.port,8001,(none),http2
-tcp.port,8002,(none),http2
-tcp.port,8003,(none),http2
-tcp.port,8004,(none),http2
-tcp.port,8005,(none),http2
-tcp.port,8006,(none),http2
-tcp.port,8007,(none),http2
-DECEOF' 2>/dev/null
-    # Enable HTTP2 body reassembly so JSON payloads render as text
-    docker exec webshark sh -c 'cat > /root/.config/wireshark/preferences <<PREFEOF
-http2.reassemble_body: TRUE
-http2.reassemble_continuations: TRUE
-http.decompress_body: TRUE
-http.desegment_body: TRUE
-http.desegment_headers: TRUE
-json.compact_form: FALSE
-PREFEOF' 2>/dev/null
-}
-
-setup_webshark() {
-    if ! $TRACE_ENABLED; then return; fi
-
-    # Check if tshark is available
+check_tshark() {
     if ! command -v tshark &>/dev/null; then
         log "WARNING: tshark not installed. Run: apt-get install -y tshark"
         log "Packet capture will be disabled."
         TRACE_ENABLED=false
-        return
+        return 1
     fi
-
-    # Check if webshark container already running
-    if docker ps --format '{{.Names}}' | grep -q '^webshark$'; then
-        log "webShark already running on port $WEBSHARK_PORT"
-        configure_webshark_decode
-    else
-        # Remove stopped container if exists
-        docker rm -f webshark 2>/dev/null || true
-
-        log "Pulling webShark image..."
-        if docker pull ghcr.io/qxip/webshark:latest 2>/dev/null; then
-            docker run -d \
-                --name webshark \
-                -p "${WEBSHARK_PORT}:8085" \
-                -v "${PCAP_DIR}:/captures" \
-                --restart unless-stopped \
-                ghcr.io/qxip/webshark:latest >/dev/null 2>&1
-
-            sleep 3
-            if docker ps --format '{{.Names}}' | grep -q '^webshark$'; then
-                log "webShark started on port $WEBSHARK_PORT"
-                configure_webshark_decode
-            else
-                log "WARNING: webShark failed to start (pcap decode still works)"
-            fi
-        else
-            log "WARNING: Could not pull webShark image (pcap decode still works)"
-        fi
-    fi
+    return 0
 }
 
 get_vm_ip() {
@@ -1056,73 +967,17 @@ get_vm_ip() {
 
 show_pcap_summary() {
     if ! $TRACE_ENABLED; then return; fi
-    local trace_file="${1:-/dev/null}"
-
-    echo ""
-    echo -e "${CYAN}================================================================${NC}"
-    echo -e "${CYAN}  PACKET CAPTURES${NC}"
-    echo -e "${CYAN}================================================================${NC}"
-    echo ""
 
     local pcap_count
     pcap_count=$(ls -1 "${PCAP_DIR}"/*.pcap 2>/dev/null | wc -l)
     if [ "$pcap_count" -gt 0 ]; then
-        echo -e "  ${YELLOW}[INFO]${NC} Captures saved: $pcap_count files in $PCAP_DIR"
-        du -sh "${PCAP_DIR}"/*.pcap 2>/dev/null | while read -r size file; do
-            echo "    ${size}  $(basename "$file")"
-        done
-
-        # Show webShark URL if container running
-        if docker ps --format '{{.Names}}' | grep -q '^webshark$'; then
-            local vm_ip
-            vm_ip=$(get_vm_ip)
-            if [ -n "$vm_ip" ]; then
-                echo ""
-                echo -e "  ${BOLD}${CYAN}Open in browser:${NC}"
-                echo -e "  ${BOLD}  http://${vm_ip}:${WEBSHARK_PORT}${NC}"
-                echo ""
-                echo "  Select a .pcap file from the list to view decoded protocols"
-                echo "  (NGAP, NAS-5GS, PFCP, GTP-U, SBI/HTTP2 fully decoded)"
-            fi
-        fi
-
         echo ""
-        echo "  Download .pcap for Wireshark:"
-        echo "    scp root@$(get_vm_ip):${PCAP_DIR}/*.pcap ."
-    else
-        echo -e "  ${YELLOW}[INFO]${NC} No pcap files captured"
+        echo -e "  ${YELLOW}[INFO]${NC} Captures saved: $pcap_count files in $PCAP_DIR"
+        echo "  Download: scp root@$(get_vm_ip):${PCAP_DIR}/*.pcap ."
     fi
-    echo ""
 }
 
 # ── Trace Management ─────────────────────────────────────────
-
-ensure_webshark() {
-    # Start webshark if not running (without requiring --trace flag)
-    if docker ps --format '{{.Names}}' | grep -q '^webshark$'; then
-        configure_webshark_decode
-        return 0
-    fi
-    docker rm -f webshark 2>/dev/null || true
-    mkdir -p "$PCAP_DIR"
-    chmod 777 "$PCAP_DIR" 2>/dev/null || true
-    log "Starting webShark..."
-    docker run -d \
-        --name webshark \
-        -p "${WEBSHARK_PORT}:8085" \
-        -v "${PCAP_DIR}:/captures" \
-        --restart unless-stopped \
-        ghcr.io/qxip/webshark:latest >/dev/null 2>&1
-    sleep 3
-    if docker ps --format '{{.Names}}' | grep -q '^webshark$'; then
-        log "webShark started on port $WEBSHARK_PORT"
-        configure_webshark_decode
-        return 0
-    else
-        log "ERROR: webShark failed to start"
-        return 1
-    fi
-}
 
 detect_remote_host() {
     # Already set explicitly via env var
@@ -1195,7 +1050,7 @@ cmd_trace() {
             echo "Subcommands:"
             echo "  list                     List all saved traces (pcap + logs)"
             echo "  view [name]              Decode & display trace on terminal"
-            echo "  open [name]              Open trace in webShark browser UI"
+            echo "  open [name]              List traces and download instructions"
             echo "  rename <old> <new>       Rename a trace"
             echo "  import <file.pcap>       Import external pcap into traces"
             echo "  delete <name>            Delete a trace"
@@ -1264,14 +1119,7 @@ trace_list() {
     done
 
     echo ""
-    # Show webshark status
-    if docker ps --format '{{.Names}}' | grep -q '^webshark$'; then
-        local vm_ip
-        vm_ip=$(get_vm_ip)
-        echo -e "  ${GREEN}webShark running:${NC} http://${vm_ip}:${WEBSHARK_PORT}"
-    else
-        echo -e "  ${YELLOW}webShark not running.${NC} Use './free5gc.sh trace open' to start it."
-    fi
+    echo "  Download: scp root@$(get_vm_ip):${PCAP_DIR}/*.pcap ."
     echo ""
 }
 
@@ -1303,11 +1151,6 @@ trace_rename() {
     chmod 644 "$new_pcap" 2>/dev/null || true
     log "Renamed: $old_name -> $new_name"
 
-    # Restart webshark so it picks up the new filename
-    if docker ps --format '{{.Names}}' | grep -q '^webshark$'; then
-        docker restart webshark >/dev/null 2>&1
-        log "webShark restarted to pick up renamed trace"
-    fi
 }
 
 trace_view() {
@@ -1598,26 +1441,13 @@ trace_view() {
 trace_open() {
     local name="${1:-}"
 
-    ensure_webshark || exit 1
-
-    # Fix permissions on all pcap files
-    chmod 644 "${PCAP_DIR}"/*.pcap 2>/dev/null || true
-
-    local vm_ip
-    vm_ip=$(get_vm_ip)
-
     if [ -z "$name" ]; then
-        echo ""
-        log "webShark is running - all traces available in the UI"
-        echo ""
-        echo -e "  ${BOLD}${CYAN}Open in browser:${NC}"
-        echo -e "  ${BOLD}  http://${vm_ip}:${WEBSHARK_PORT}${NC}"
         echo ""
         echo "  Available traces:"
         ls -1 "${PCAP_DIR}"/*.pcap 2>/dev/null | xargs -I{} basename {} .pcap | sed 's/^/    /'
         echo ""
-        echo "  Select any .pcap file from the webShark file list."
-        echo "  Protocols decoded: NGAP, NAS-5GS, PFCP, GTP-U, SCTP"
+        echo "  Download: scp root@$(get_vm_ip):${PCAP_DIR}/*.pcap ."
+        echo "  View:     ./free5gc.sh trace view <name>"
     else
         local pcap_file="${PCAP_DIR}/${name}.pcap"
         if [ ! -f "$pcap_file" ]; then
@@ -1627,16 +1457,9 @@ trace_open() {
             exit 1
         fi
 
-        chmod 644 "$pcap_file" 2>/dev/null || true
-
         echo ""
-        log "Trace '$name' ready for viewing"
-        echo ""
-        echo -e "  ${BOLD}${CYAN}Open in browser:${NC}"
-        echo -e "  ${BOLD}  http://${vm_ip}:${WEBSHARK_PORT}${NC}"
-        echo ""
-        echo "  Select '${name}.pcap' from the file list in webShark."
-        echo "  Protocols decoded: NGAP, NAS-5GS, PFCP, GTP-U, SCTP"
+        echo "  Download: scp root@$(get_vm_ip):${pcap_file} ."
+        echo "  View:     ./free5gc.sh trace view ${name}"
     fi
     echo ""
 }
@@ -1661,16 +1484,7 @@ trace_import() {
     cp "$src_file" "$dest"
     chmod 644 "$dest" 2>/dev/null || true
     log "Imported: $src_file -> $name"
-
-    # Start webshark if not running
-    ensure_webshark
-
-    local vm_ip
-    vm_ip=$(get_vm_ip)
-    echo ""
-    echo -e "  ${BOLD}${CYAN}View in browser:${NC}"
-    echo -e "  ${BOLD}  http://${vm_ip}:${WEBSHARK_PORT}${NC}"
-    echo "  Select '${name}.pcap' from the file list."
+    echo "  View: ./free5gc.sh trace view ${name}"
     echo ""
 }
 
@@ -1831,13 +1645,6 @@ cmd_test_simple() {
         sleep 5
     fi
 
-    # Set up webShark + packet capture
-    setup_webshark
-
-    # Record log positions
-    log "Recording log positions..."
-    record_log_positions
-
     # Kill existing UE processes
     cleanup_ue_processes
 
@@ -1871,86 +1678,32 @@ cmd_test_simple() {
     done
 
     if [ "$registered" = false ]; then
-        log "WARNING: Registration not confirmed after ${max_wait}s (collecting logs anyway)"
+        log "WARNING: Registration not confirmed after ${max_wait}s"
     fi
 
     sleep 2
 
-    # Collect new logs
-    local timestamp
-    timestamp=$(date '+%Y%m%d-%H%M%S')
-    local log_dir="logs/trace-${timestamp}"
-    mkdir -p "$log_dir"
-
     # Stop packet capture
     stop_capture
-
-    log "Collecting logs from all NFs..."
-    collect_new_logs "$log_dir"
-
-    # Merge and render chronological flow
-    local trace_file="$log_dir/trace.log"
-    echo "free5GC Single UE Registration Trace - $(date)" > "$trace_file"
-    echo "" >> "$trace_file"
-
-    log "Merging logs chronologically..."
-    local merge_dir
-    merge_dir=$(collect_and_merge_logs "$log_dir")
-
-    echo ""
-    echo -e "${CYAN}================================================================${NC}"
-    echo -e "${CYAN}  NF-to-NF Flow: UE Registration${NC}"
-    echo -e "${CYAN}================================================================${NC}"
-    echo ""
-    echo "  Legend:  ==>  Key milestone    >>>  SBI request (POST/PUT)"
-    echo "          <<<  SBI response      -->  NF-to-NF call"
-    echo "          [!!] Error/rejection"
-    echo ""
-
-    render_chronological_flow "${merge_dir}/merged.log" "$trace_file"
-
-    # Log line counts per NF
-    echo ""
-    echo -e "${BOLD}--- Log Volume Per NF ---${NC}"
-    for nf_file in "$log_dir"/*.log; do
-        [ -s "$nf_file" ] || continue
-        local nf_name
-        nf_name=$(basename "$nf_file" .log)
-        local count
-        count=$(wc -l < "$nf_file" | tr -d ' ')
-        echo "  $nf_name: $count new log lines"
-    done
-
-    rm -rf "$merge_dir"
 
     # Result
     echo ""
     echo -e "${BOLD}--- Result ---${NC}"
     if [ "$registered" = true ]; then
         echo -e "  ${GREEN}PASS${NC} - UE successfully registered"
-        if [ "$upf_running" = true ]; then
-            if grep -q "PDU Session establishment is successful\|PDU session" "$log_dir/ueransim.log" 2>/dev/null || \
-               grep -q "PDUSession\|PFCP Session Establishment" "$log_dir/smf.log" 2>/dev/null; then
-                echo -e "  ${GREEN}PASS${NC} - PDU Session established"
-            else
-                echo -e "  ${YELLOW}INFO${NC} - PDU Session status unclear (check trace)"
-            fi
-        else
-            echo -e "  ${YELLOW}INFO${NC} - UPF not running (CP-only mode) - no PDU session expected"
-        fi
     else
         echo -e "  ${RED}FAIL${NC} - UE registration not confirmed"
     fi
 
-    # Decode pcap if trace mode enabled
-    decode_capture "${PCAP_DIR}/01-single-ue-registration.pcap" "$trace_file"
-    show_pcap_summary "$trace_file"
+    # Show pcap location
+    if $TRACE_ENABLED; then
+        echo ""
+        echo -e "  ${CYAN}Pcap saved:${NC} ${PCAP_DIR}/01-single-ue-registration.pcap"
+        echo "  Download: scp root@$(get_vm_ip):${PCAP_DIR}/*.pcap ."
+        echo "  View:     ./free5gc.sh trace view 01-single-ue-registration"
+    fi
 
     echo ""
-    log "Trace saved to: $trace_file"
-    log "Raw logs: $log_dir/"
-    echo ""
-
     cleanup_ue_processes
 }
 
@@ -1985,19 +1738,6 @@ cmd_test_full() {
         exit 1
     fi
 
-    # Set up webShark + packet capture
-    setup_webshark
-
-    local timestamp
-    timestamp=$(date '+%Y%m%d-%H%M%S')
-    local trace_file="logs/trace-${timestamp}.log"
-    local log_dir="logs/trace-full-${timestamp}"
-    mkdir -p "$log_dir" "logs"
-
-    echo "free5GC Full Test - $(date)" > "$trace_file"
-    echo "Phases: Attach($ATTACH_COUNT) + Reject($REJECT_COUNT) + Identify($IDENTIFY_COUNT)" >> "$trace_file"
-    echo "" >> "$trace_file"
-
     # Start packet capture for entire test
     start_capture "full-test"
 
@@ -2009,14 +1749,10 @@ cmd_test_full() {
     echo -e "${CYAN}  Phase 1: Attach $ATTACH_COUNT UEs (Registration + PDU Session)${NC}"
     echo -e "${CYAN}================================================================${NC}"
     echo ""
-    echo "Phase 1: Attach $ATTACH_COUNT UEs" >> "$trace_file"
-    echo "================================" >> "$trace_file"
-    echo "" >> "$trace_file"
 
     provision_multi_subscribers 1 "$ATTACH_COUNT" "attach test"
 
     cleanup_ue_processes
-    record_log_positions
 
     local first_imsi
     first_imsi=$(format_imsi 1)
@@ -2031,21 +1767,9 @@ cmd_test_full() {
     log "Waiting 25s for registrations..."
     sleep 25
 
-    collect_new_logs "$log_dir/phase1"
-
-    # Merge and render chronological flow
-    local merge_dir_p1
-    merge_dir_p1=$(collect_and_merge_logs "$log_dir/phase1")
-
-    echo ""
-    echo -e "${BOLD}--- Phase 1: Full NF-to-NF Flow ---${NC}"
-    echo ""
-    render_chronological_flow "${merge_dir_p1}/merged.log" "$trace_file" \
-        "Registration|Authentication|Security|PDUSession|Context Setup|PFCP|Initial NAS|Nausf|Nudm|Nudr|Nsmf|Npcf|nausf|nudm|nudr|nsmf|npcf|GIN|HandleUe|GenerateAuth|ConfirmAuth|GetAuthSubs|SmData|AmData|SDM|SUCI|SUPI|transition|CreateSMContext|Session Establishment|5gAka|5G AKA"
-
     # Analyze results from gNB logs
     local gnb_logs
-    gnb_logs=$(docker logs ueransim 2>&1 | tail -n "+$((LOG_POS_ueransim + 1))")
+    gnb_logs=$(docker logs ueransim 2>&1 | tail -500)
     local context_setups
     context_setups=$(echo "$gnb_logs" | grep -c "Initial Context Setup Request received" || true)
     local pdu_setups
@@ -2073,35 +1797,6 @@ cmd_test_full() {
         log_fail "Only $unique_pdu_ues/$ATTACH_COUNT UEs got PDU sessions"
     fi
 
-    # Per-UE summary table (use collected AMF logs which contain per-UE SUPI)
-    local amf_phase1_log="$log_dir/phase1/amf.log"
-
-    echo ""
-    echo -e "${BOLD}  UE#   IMSI                          Status        PDU${NC}"
-    echo "  ----  ----------------------------  ------------  --------"
-    for ((i = 1; i <= ATTACH_COUNT; i++)); do
-        local imsi
-        imsi=$(format_imsi "$i")
-
-        local status="${RED}NO_ATTEMPT${NC}"
-        local pdu="-"
-        # AMF logs contain [supi:SUPI:imsi-...] per UE
-        if grep -q "supi:SUPI:${imsi}" "$amf_phase1_log" 2>/dev/null; then
-            if grep "supi:SUPI:${imsi}" "$amf_phase1_log" | grep -q "Handle InitialRegistration\|ContextSetup" 2>/dev/null; then
-                status="${GREEN}REGISTERED${NC}"
-                if grep "supi:SUPI:${imsi}" "$amf_phase1_log" | grep -q "create smContext" 2>/dev/null; then
-                    pdu="${GREEN}YES${NC}"
-                else
-                    pdu="${YELLOW}NO${NC}"
-                fi
-            else
-                status="${YELLOW}ATTEMPTED${NC}"
-            fi
-        fi
-        printf "  %-4d  %s  %-22b  %b\n" "$i" "$imsi" "$status" "$pdu"
-    done
-
-    rm -rf "$merge_dir_p1"
     cleanup_ue_processes
 
     # ══════════════════════════════════════════════════════════
@@ -2112,11 +1807,6 @@ cmd_test_full() {
     echo -e "${CYAN}  Phase 2: Reject $REJECT_COUNT Unprovisioned UEs${NC}"
     echo -e "${CYAN}================================================================${NC}"
     echo ""
-    echo "" >> "$trace_file"
-    echo "Phase 2: Reject $REJECT_COUNT Unprovisioned UEs" >> "$trace_file"
-    echo "================================" >> "$trace_file"
-    echo "" >> "$trace_file"
-
     # Ensure reject-range IMSIs are NOT provisioned
     log "Ensuring reject-test IMSIs are NOT provisioned..."
     docker exec mongodb mongo mongodb://localhost:27017/free5gc --quiet --eval "
@@ -2129,12 +1819,11 @@ cmd_test_full() {
       'policyData.ues.amData'
     ];
     collections.forEach(function(col) {
-      db[col].deleteMany({ ueId: { \$regex: /^imsi-20893000000(50|51|52)/ } });
+      db[col].deleteMany({ ueId: { \$regex: /^imsi-00101000005(50|51|52)/ } });
     });
     " 2>/dev/null
 
     cleanup_ue_processes
-    record_log_positions
 
     # Launch 200 UEs in batches of 50
     local batch_size=50
@@ -2160,43 +1849,17 @@ cmd_test_full() {
     log "Waiting 30s for rejection procedures..."
     sleep 30
 
-    collect_new_logs "$log_dir/phase2"
-
-    # Merge and render rejection flow (show first ~200 lines of detail)
-    local merge_dir_p2
-    merge_dir_p2=$(collect_and_merge_logs "$log_dir/phase2")
-
-    echo ""
-    echo -e "${BOLD}--- Phase 2: Rejection Flow (sample of first 3 UEs) ---${NC}"
-    echo ""
-    render_chronological_flow "${merge_dir_p2}/merged.log" "$trace_file" \
-        "UE\[1\]|UE\[2\]|UE\[3\]|Authenticate Request Error|Registration Reject|Authentication procedure failed|Nil PermanentKey|not found|Handle Registration Request|Authentication procedure$|HandleUeAuthPostRequest|GenerateAuthDataRequest|suci-0-208-93-0000-0-0-00000050(0[123])|GIN.*50(0[123])" \
-        200
-
-    # Analyze rejection results
+    # Analyze rejection results from gNB logs
     local reject_gnb_logs
-    reject_gnb_logs=$(docker logs ueransim 2>&1 | tail -n "+$((LOG_POS_ueransim + 1))")
+    reject_gnb_logs=$(docker logs ueransim 2>&1 | tail -1000)
     local reject_context
     reject_context=$(echo "$reject_gnb_logs" | grep -c "Initial Context Setup Request received" || true)
     local reject_rrc
     reject_rrc=$(echo "$reject_gnb_logs" | grep -c "RRC Setup for UE\|new signal detected" || true)
-    local reject_nas
-    reject_nas=$(echo "$reject_gnb_logs" | grep -c "Initial NAS message received" || true)
-
-    # CP-side analysis
-    local cp_logs
-    cp_logs=$(docker logs free5gc-cp 2>&1 | tail -n "+$((LOG_POS_amf + 1))" 2>/dev/null)
-    local auth_errors
-    auth_errors=$(echo "$cp_logs" | grep -ci "Nil PermanentKey\|not found\|Authenticate Request Error" 2>/dev/null || true)
-    local reg_rejects
-    reg_rejects=$(echo "$cp_logs" | grep -ci "Registration Reject\|Send Registration Reject" 2>/dev/null || true)
 
     echo ""
     echo -e "${BOLD}--- Rejection Summary ---${NC}"
     printf "  %-45s  %s\n" "RRC Setup attempts:" "$reject_rrc"
-    printf "  %-45s  %s\n" "Initial NAS messages:" "$reject_nas"
-    printf "  %-45s  ${RED}%s${NC}\n" "Authentication errors (AUSF/UDM):" "$auth_errors"
-    printf "  %-45s  ${RED}%s${NC}\n" "Registration Rejects sent:" "$reg_rejects"
     printf "  %-45s  ${GREEN}%s${NC}\n" "Initial Context Setups (should be 0):" "$reject_context"
     echo ""
 
@@ -2208,7 +1871,6 @@ cmd_test_full() {
         log_fail "No UE connection attempts detected"
     fi
 
-    rm -rf "$merge_dir_p2"
     cleanup_ue_processes
 
     # ══════════════════════════════════════════════════════════
@@ -2219,15 +1881,9 @@ cmd_test_full() {
     echo -e "${CYAN}  Phase 3: Identify $IDENTIFY_COUNT UEs (SUPI/5G-GUTI)${NC}"
     echo -e "${CYAN}================================================================${NC}"
     echo ""
-    echo "" >> "$trace_file"
-    echo "Phase 3: Identify $IDENTIFY_COUNT UEs" >> "$trace_file"
-    echo "================================" >> "$trace_file"
-    echo "" >> "$trace_file"
-
     provision_multi_subscribers "$IDENTIFY_IMSI_START" "$IDENTIFY_COUNT" "identification test"
 
     cleanup_ue_processes
-    record_log_positions
 
     # Launch 100 UEs in batches of 50
     local id_batch_size=50
@@ -2253,45 +1909,15 @@ cmd_test_full() {
     log "Waiting ${SETTLE_TIME}s for registrations to complete..."
     sleep "$SETTLE_TIME"
 
-    collect_new_logs "$log_dir/phase3"
-
-    # Merge and render identification flow (sample of first 5 UEs)
-    local merge_dir_p3
-    merge_dir_p3=$(collect_and_merge_logs "$log_dir/phase3")
-
-    echo ""
-    echo -e "${BOLD}--- Phase 3: Identification Flow (sample) ---${NC}"
-    echo ""
-    render_chronological_flow "${merge_dir_p3}/merged.log" "$trace_file" \
-        "Registration|Authentication|Security|SUPI|SUCI|5G-GUTI|identity|Context Setup|GIN|HandleUe|GenerateAuth|ConfirmAuth|GetAuthSubs|5gAka|5G AKA|AmData|transition" \
-        150
-
-    # Analyze identification results
+    # Analyze identification results from gNB logs
     local id_gnb_logs
-    id_gnb_logs=$(docker logs ueransim 2>&1 | tail -n "+$((LOG_POS_ueransim + 1))")
+    id_gnb_logs=$(docker logs ueransim 2>&1 | tail -1000)
     local id_context_setups
     id_context_setups=$(echo "$id_gnb_logs" | grep -c "Initial Context Setup Request received" || true)
-    local id_rrc_setups
-    id_rrc_setups=$(echo "$id_gnb_logs" | grep -c "RRC Setup for UE" || true)
-    local id_initial_nas
-    id_initial_nas=$(echo "$id_gnb_logs" | grep -c "Initial NAS message received from UE" || true)
-    local id_unique_pdu
-    id_unique_pdu=$(echo "$id_gnb_logs" | grep "PDU session resource(s) setup for UE" | \
-        sed 's/.*UE\[\([0-9]*\)\].*/\1/' | sort -un | wc -l)
-
-    # CP-side: count authentication/identity events
-    local id_cp_logs
-    id_cp_logs=$(docker logs free5gc-cp 2>&1 | tail -n "+$((LOG_POS_amf + 1))" 2>/dev/null)
-    local id_auth_events
-    id_auth_events=$(echo "$id_cp_logs" | grep -ci "authentication\|AuthenticationData\|SUPI\|SUCI\|5G-GUTI\|identity" 2>/dev/null || true)
 
     echo ""
     echo -e "${BOLD}--- Identification Summary ---${NC}"
-    printf "  %-45s  %s\n" "RRC Setups (radio identification):" "$id_rrc_setups"
-    printf "  %-45s  %s\n" "Initial NAS messages (NAS identification):" "$id_initial_nas"
-    printf "  %-45s  %s\n" "Initial Context Setups (full auth+identify):" "$id_context_setups"
-    printf "  %-45s  %s\n" "Unique UEs with PDU sessions:" "$id_unique_pdu"
-    printf "  %-45s  %s\n" "Core authentication/identity events:" "$id_auth_events"
+    printf "  %-45s  %s\n" "Initial Context Setups:" "$id_context_setups"
     echo ""
 
     if [ "$id_context_setups" -ge "$IDENTIFY_COUNT" ]; then
@@ -2302,14 +1928,11 @@ cmd_test_full() {
         log_fail "Only $id_context_setups/$IDENTIFY_COUNT UEs identified"
     fi
 
-    rm -rf "$merge_dir_p3"
     cleanup_ue_processes
     cleanup_test_data
 
-    # Stop packet capture and decode
+    # Stop packet capture
     stop_capture
-    decode_capture "${PCAP_DIR}/full-test.pcap" "$trace_file"
-    show_pcap_summary "$trace_file"
 
     # ══════════════════════════════════════════════════════════
     # Final Summary
@@ -2324,21 +1947,19 @@ cmd_test_full() {
     echo -e "  ${RED}Failed:${NC}       $TOTAL_FAIL"
     echo ""
 
-    {
-        echo ""
-        echo "SUMMARY: Total=$TOTAL_TESTS Passed=$TOTAL_PASS Failed=$TOTAL_FAIL"
-        echo "Date: $(date)"
-    } >> "$trace_file"
-
     if [ "$TOTAL_FAIL" -eq 0 ]; then
         echo -e "  ${GREEN}ALL TESTS PASSED${NC}"
     else
         echo -e "  ${RED}$TOTAL_FAIL TEST(S) FAILED${NC}"
     fi
 
-    echo ""
-    log "Full trace: $trace_file"
-    log "Raw logs: $log_dir/"
+    # Show pcap location
+    if $TRACE_ENABLED; then
+        echo ""
+        echo -e "  ${CYAN}Pcap saved:${NC} ${PCAP_DIR}/full-test.pcap"
+        echo "  Download: scp root@$(get_vm_ip):${PCAP_DIR}/*.pcap ."
+        echo "  View:     ./free5gc.sh trace view full-test"
+    fi
     echo ""
 
     [ "$TOTAL_FAIL" -gt 0 ] && exit 1
@@ -2388,12 +2009,12 @@ show_usage() {
     echo "  build [--quick]       Build all NFs from source (~15 min)"
     echo "                        --quick: rebuild runtime images only"
     echo "  start                 Start containers + provision subscriber"
-    echo "  test [--trace]        1 UE registration + full NF flow trace"
-    echo "  test full [--trace]   16 attach + 200 reject + 100 identify + trace"
-    echo "                        --trace: capture packets with tshark + webShark UI"
+    echo "  test [--trace]        1 UE registration + pcap capture"
+    echo "  test full [--trace]   16 attach + 200 reject + 100 identify + pcap"
+    echo "                        --trace: capture packets with tshark"
     echo "  trace list            List all saved pcap traces"
     echo "  trace view [name]     Decode & show trace payloads in terminal"
-    echo "  trace open [name]     Open trace in webShark browser UI"
+    echo "  trace open [name]     List traces and download instructions"
     echo "  trace rename old new  Rename a trace"
     echo "  trace import file.pcap [name]  Import external pcap"
     echo "  trace delete name     Delete a trace"
@@ -2407,7 +2028,7 @@ show_usage() {
     echo "  ./free5gc.sh test --trace"
     echo "  ./free5gc.sh trace list"
     echo "  ./free5gc.sh trace view full-test"
-    echo "  ./free5gc.sh trace open"
+    echo "  ./free5gc.sh trace open"   # list traces + download cmd
     echo "  ./free5gc.sh trace rename full-test prod-16ue-attach"
     echo "  ./free5gc.sh logs amf"
 }

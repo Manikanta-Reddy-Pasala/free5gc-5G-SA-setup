@@ -18,72 +18,22 @@ configuration:
   nrfUri: http://10.100.200.16:8000
   nrfCertPem: cert/nrf.pem
   supportedPlmnList:
-    - mcc: 208
-      mnc: 93
+    - mcc: 001
+      mnc: 01
   supportedNssaiInPlmnList:
     - plmnId:
-        mcc: 208
-        mnc: 93
+        mcc: 001
+        mnc: 01
       supportedSnssaiList:
-        - sst: 1
-          sd: 010203
-        - sst: 1
-          sd: 112233
-        - sst: 1
-          sd: 000003
-        - sst: 2
-          sd: 000001
-        - sst: 2
-          sd: 000002
+        - sst: 3
+          sd: 198153
   nsiList:
     - snssai:
-        sst: 1
+        sst: 3
+        sd: 198153
       nsiInformationList:
         - nrfId: http://nrf.free5gc.org:8000/nnrf-nfm/v1/nf-instances
           nsiId: 10
-    - snssai:
-        sst: 1
-        sd: 000001
-      nsiInformationList:
-        - nrfId: http://nrf.free5gc.org:8000/nnrf-nfm/v1/nf-instances
-          nsiId: 11
-    - snssai:
-        sst: 1
-        sd: 000002
-      nsiInformationList:
-        - nrfId: http://nrf.free5gc.org:8000/nnrf-nfm/v1/nf-instances
-          nsiId: 12
-        - nrfId: http://nrf.free5gc.org:8000/nnrf-nfm/v1/nf-instances
-          nsiId: 12
-    - snssai:
-        sst: 1
-        sd: 000003
-      nsiInformationList:
-        - nrfId: http://nrf.free5gc.org:8000/nnrf-nfm/v1/nf-instances
-          nsiId: 13
-    - snssai:
-        sst: 2
-      nsiInformationList:
-        - nrfId: http://nrf.free5gc.org:8000/nnrf-nfm/v1/nf-instances
-          nsiId: 20
-    - snssai:
-        sst: 2
-        sd: 000001
-      nsiInformationList:
-        - nrfId: http://nrf.free5gc.org:8000/nnrf-nfm/v1/nf-instances
-          nsiId: 21
-    - snssai:
-        sst: 1
-        sd: 010203
-      nsiInformationList:
-        - nrfId: http://nrf.free5gc.org:8000/nnrf-nfm/v1/nf-instances
-          nsiId: 22
-    - snssai:
-        sst: 1
-        sd: 112233
-      nsiInformationList:
-        - nrfId: http://nrf.free5gc.org:8000/nnrf-nfm/v1/nf-instances
-          nsiId: 23
   amfSetList:
     - amfSetId: 1
       amfList:

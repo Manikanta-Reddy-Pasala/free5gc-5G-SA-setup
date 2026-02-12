@@ -16,8 +16,6 @@ gtpu:
 dnnList:
   - dnn: internet
     cidr: 10.60.0.0/16
-  - dnn: internet
-    cidr: 10.61.0.0/16
 
 logger:
   enable: true

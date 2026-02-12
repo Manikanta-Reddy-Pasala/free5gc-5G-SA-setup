@@ -23,23 +23,21 @@ configuration:
     - namf-oam
   servedGuamiList:
     - plmnId:
-        mcc: 208
-        mnc: 93
+        mcc: 001
+        mnc: 01
       amfId: cafe00
   supportTaiList:
     - plmnId:
-        mcc: 208
-        mnc: 93
+        mcc: 001
+        mnc: 01
       tac: 000001
   plmnSupportList:
     - plmnId:
-        mcc: 208
-        mnc: 93
+        mcc: 001
+        mnc: 01
       snssaiList:
-        - sst: 1
-          sd: 010203
-        - sst: 1
-          sd: 112233
+        - sst: 3
+          sd: 198153
   supportDnnList:
     - internet
   nrfUri: http://10.100.200.16:8000
