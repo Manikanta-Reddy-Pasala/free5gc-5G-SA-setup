@@ -9,3 +9,8 @@ cert/*_*.pem
 
 # Remote host config (machine-specific)
 .free5gc-host
+# Build artifacts
+build-output/
+*.bak
+logs/
+scripts/
