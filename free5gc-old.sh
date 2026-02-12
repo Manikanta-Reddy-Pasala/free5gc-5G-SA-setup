@@ -9,8 +9,10 @@
 #   ./free5gc.sh build                # Compile all NFs from source (~15 min)
 #   ./free5gc.sh build --quick        # Rebuild runtime images only
 #   ./free5gc.sh start                # Start containers + provision subscriber
-#   ./free5gc.sh test                 # 1 UE registration test
+#   ./free5gc.sh test                 # 1 UE registration + full NF flow trace
 #   ./free5gc.sh test --trace         # Same + tshark packet capture
+#   ./free5gc.sh test full            # 16 attach + 200 reject + 100 identify + trace
+#   ./free5gc.sh test full --trace    # Same + packet capture
 #   ./free5gc.sh trace list           # List all saved pcap traces
 #   ./free5gc.sh trace view [name]    # Decode & show trace payloads in terminal
 #   ./free5gc.sh trace open [name]    # List traces and download instructions
@@ -39,6 +41,15 @@ AMF_FIELD="8000"
 WEBUI_IMAGE="free5gc/webui:v4.2.0"
 
 NFS=(nrf udr udm ausf nssf pcf amf smf)
+
+ATTACH_COUNT=16
+REJECT_COUNT=200
+REJECT_IMSI_START=5001
+IDENTIFY_COUNT=100
+IDENTIFY_IMSI_START=1001
+PROVISION_BATCH=10
+UE_SPAWN_DELAY_MS=100
+SETTLE_TIME=20
 
 # Colors
 RED=$'\033[0;31m'
@@ -86,6 +97,10 @@ log_fail() {
 
 log_info() {
     echo -e "  ${YELLOW}[INFO]${NC} $1"
+}
+
+format_imsi() {
+    printf "imsi-%s%s%010d" "$MCC" "$MNC" "$1"
 }
 
 detect_mode() {
@@ -251,6 +266,403 @@ db['policyData.ues.smData'].updateOne(
 )" 2>&1 | grep -v "^$"
 
     log "Subscriber $imsi provisioned."
+}
+
+provision_subscriber_direct() {
+    # Direct MongoDB provisioning (for multi-UE tests, faster than WebUI)
+    local imsi_num=$1
+    local imsi
+    imsi=$(format_imsi "$imsi_num")
+
+    docker exec mongodb mongo mongodb://localhost:27017/free5gc --quiet --eval "
+    db['subscriptionData.authenticationData.authenticationSubscription'].updateOne(
+      { ueId: '${imsi}' },
+      { \$set: {
+          authenticationMethod: '5G_AKA',
+          encPermanentKey: '${K}',
+          sequenceNumber: { sqn: '${SQN}' },
+          authenticationManagementField: '${AMF_FIELD}',
+          encOpcKey: '${OPC}',
+          ueId: '${imsi}',
+          tenantId: 'default'
+      }},
+      { upsert: true }
+    );
+    db['subscriptionData.provisionedData.amData'].updateOne(
+      { ueId: '${imsi}', servingPlmnId: '${PLMN}' },
+      { \$set: {
+          ueId: '${imsi}', servingPlmnId: '${PLMN}',
+          gpsis: ['msisdn-0900000000'],
+          subscribedUeAmbr: { downlink: '2 Gbps', uplink: '1 Gbps' },
+          nssai: { defaultSingleNssais: [{ sst: 3, sd: '198153' }] }
+      }},
+      { upsert: true }
+    );
+    db['subscriptionData.provisionedData.smData'].updateOne(
+      { ueId: '${imsi}', servingPlmnId: '${PLMN}', 'singleNssai.sst': 3, 'singleNssai.sd': '198153' },
+      { \$set: {
+          ueId: '${imsi}', servingPlmnId: '${PLMN}',
+          singleNssai: { sst: 3, sd: '198153' },
+          dnnConfigurations: { internet: {
+            pduSessionTypes: { defaultSessionType: 'IPV4', allowedSessionTypes: ['IPV4'] },
+            sscModes: { defaultSscMode: 'SSC_MODE_1' },
+            '5gQosProfile': { '5qi': 9, arp: { priorityLevel: 8, preemptCap: '', preemptVuln: '' } },
+            sessionAmbr: { downlink: '200 Mbps', uplink: '100 Mbps' }
+          }}
+      }},
+      { upsert: true }
+    );
+    db['subscriptionData.provisionedData.smfSelectionSubscriptionData'].updateOne(
+      { ueId: '${imsi}', servingPlmnId: '${PLMN}' },
+      { \$set: {
+          ueId: '${imsi}', servingPlmnId: '${PLMN}',
+          subscribedSnssaiInfos: {
+            '03198153': { dnnInfos: [{ dnn: 'internet' }] }
+          }
+      }},
+      { upsert: true }
+    );
+    db['policyData.ues.smData'].updateOne(
+      { ueId: '${imsi}' },
+      { \$set: {
+          ueId: '${imsi}',
+          smPolicySnssaiData: {
+            '03198153': { snssai: { sst: 3, sd: '198153' }, smPolicyDnnData: { internet: { dnn: 'internet' } } }
+          }
+      }},
+      { upsert: true }
+    );
+    db['policyData.ues.amData'].updateOne(
+      { ueId: '${imsi}' },
+      { \$set: { ueId: '${imsi}' } },
+      { upsert: true }
+    );
+    " > /dev/null 2>&1
+}
+
+provision_multi_subscribers() {
+    local start=$1
+    local count=$2
+    local label=$3
+
+    log "Provisioning $count subscribers for $label..."
+    for ((i = 0; i < count; i++)); do
+        provision_subscriber_direct "$((start + i))" &
+        if (( (i + 1) % PROVISION_BATCH == 0 )); then
+            wait
+        fi
+    done
+    wait
+    log "  Provisioned $count subscribers"
+}
+
+cleanup_test_data() {
+    log "Removing test subscriber data..."
+    docker exec mongodb mongo mongodb://localhost:27017/free5gc --quiet --eval "
+    var collections = [
+      'subscriptionData.authenticationData.authenticationSubscription',
+      'subscriptionData.provisionedData.amData',
+      'subscriptionData.provisionedData.smData',
+      'subscriptionData.provisionedData.smfSelectionSubscriptionData',
+      'policyData.ues.smData',
+      'policyData.ues.amData'
+    ];
+    collections.forEach(function(col) {
+      db[col].deleteMany({ ueId: { \$ne: 'imsi-001010000050641' } });
+    });
+    " 2>/dev/null
+}
+
+# ── Log Position Snapshotting & Collection ──────────────────
+
+record_log_positions() {
+    # Store per-NF line counts (bash 3.2 compatible - no associative arrays)
+    for nf in "${NFS[@]}"; do
+        local log_file="/var/log/free5gc/${nf}.log"
+        local lines
+        lines=$(docker exec free5gc-cp wc -l "$log_file" 2>/dev/null | awk '{print $1}' || echo "0")
+        eval "LOG_POS_${nf}=${lines}"
+    done
+
+    LOG_POS_upf=0
+    if docker ps --format '{{.Names}}' | grep -q "^upf$"; then
+        LOG_POS_upf=$(docker logs upf 2>&1 | wc -l || echo "0")
+    fi
+
+    LOG_POS_ueransim=$(docker logs ueransim 2>&1 | wc -l || echo "0")
+}
+
+collect_new_logs() {
+    local output_dir="$1"
+    mkdir -p "$output_dir"
+
+    for nf in "${NFS[@]}"; do
+        local log_file="/var/log/free5gc/${nf}.log"
+        eval "local start_line=\$((LOG_POS_${nf} + 1))"
+        docker exec free5gc-cp tail -n "+${start_line}" "$log_file" 2>/dev/null > "$output_dir/${nf}.log" || true
+    done
+
+    if docker ps --format '{{.Names}}' | grep -q "^upf$"; then
+        docker logs upf 2>&1 | tail -n "+$((LOG_POS_upf + 1))" > "$output_dir/upf.log" || true
+    fi
+
+    docker logs ueransim 2>&1 | tail -n "+$((LOG_POS_ueransim + 1))" > "$output_dir/ueransim.log" || true
+}
+
+# ── Trace Rendering ─────────────────────────────────────────
+
+collect_and_merge_logs() {
+    # Collect new logs from all NFs, merge chronologically into a tagged file.
+    # Each line: SORT_KEY\tNF\tSUBMODULE\tLEVEL\tMESSAGE (tab-separated)
+    # Returns path to a temp dir containing merged.log
+    local log_dir="$1"
+    local tmp_dir
+    tmp_dir=$(mktemp -d)
+
+    # Collect CP NF logs (parallel)
+    for nf in "${NFS[@]}"; do
+        local nf_upper
+        nf_upper=$(echo "$nf" | tr '[:lower:]' '[:upper:]')
+        if [ -s "$log_dir/${nf}.log" ]; then
+            (
+            awk -v nf="$nf_upper" '
+            function extract_bracket(s, result,    p1, p2) {
+                p1 = index(s, "[")
+                if (p1 == 0) return 0
+                p2 = index(s, "]")
+                if (p2 == 0) return 0
+                result[0] = substr(s, p1+1, p2-p1-1)
+                result[1] = substr(s, p2+1)
+                return 1
+            }
+            {
+                gsub(/\033\[[0-9;]*m/, "")
+                gsub(/^[ \t]+/, "")
+                # Match: 2026-02-10T20:09:15.999079668Z
+                if ($0 ~ /^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]+Z/) {
+                    ts = $0; sub(/Z.*/, "", ts); sub(/.*T/, "", ts)
+                    split(ts, tp, "."); frac = tp[2]
+                    while (length(frac) < 9) frac = frac "0"
+                    sort_key = tp[1] "." frac
+                    rest = $0; sub(/^[^ ]+ /, "", rest)
+
+                    level = "INFO"; submod = "Main"; msg = rest
+                    # Parse [LEVEL][Module][SubModule] or [LEVEL][Module]
+                    tmp = rest; b1[0]=""; b2[0]=""; b3[0]=""
+                    if (extract_bracket(tmp, b1)) {
+                        level = b1[0]
+                        tmp = b1[1]
+                        if (extract_bracket(tmp, b2)) {
+                            submod = b2[0]
+                            tmp = b2[1]
+                            if (extract_bracket(tmp, b3)) {
+                                submod = b3[0]
+                            }
+                        }
+                        # Strip all leading [...]  from msg
+                        msg = rest
+                        while (msg ~ /^\[/) {
+                            sub(/^\[[^\]]*\][ ]*/, "", msg)
+                        }
+                    }
+                    printf "%s\t%s\t%s\t%s\t%s\n", sort_key, nf, submod, level, msg
+                }
+            }' "$log_dir/${nf}.log" > "${tmp_dir}/${nf}.tagged"
+            ) &
+        fi
+    done
+
+    # UPF logs
+    if [ -s "$log_dir/upf.log" ]; then
+        (
+        awk '
+        function extract_bracket(s, result,    p1, p2) {
+            p1 = index(s, "[")
+            if (p1 == 0) return 0
+            p2 = index(s, "]")
+            if (p2 == 0) return 0
+            result[0] = substr(s, p1+1, p2-p1-1)
+            result[1] = substr(s, p2+1)
+            return 1
+        }
+        {
+            gsub(/\033\[[0-9;]*m/, "")
+            gsub(/^[ \t]+/, "")
+            if ($0 ~ /^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]+Z/) {
+                ts = $0; sub(/Z.*/, "", ts); sub(/.*T/, "", ts)
+                split(ts, tp, "."); frac = tp[2]
+                while (length(frac) < 9) frac = frac "0"
+                sort_key = tp[1] "." frac
+                rest = $0; sub(/^[^ ]+ /, "", rest)
+                level = "INFO"; submod = "Main"; msg = rest
+                tmp = rest; b1[0]=""; b2[0]=""; b3[0]=""
+                if (extract_bracket(tmp, b1)) {
+                    level = b1[0]
+                    tmp = b1[1]
+                    if (extract_bracket(tmp, b2)) {
+                        submod = b2[0]
+                        tmp = b2[1]
+                        if (extract_bracket(tmp, b3)) {
+                            submod = b3[0]
+                        }
+                    }
+                    msg = rest
+                    while (msg ~ /^\[/) {
+                        sub(/^\[[^\]]*\][ ]*/, "", msg)
+                    }
+                }
+                printf "%s\t%s\t%s\t%s\t%s\n", sort_key, "UPF", submod, level, msg
+            }
+        }' "$log_dir/upf.log" > "${tmp_dir}/upf.tagged"
+        ) &
+    fi
+
+    # UERANSIM logs (different timestamp format)
+    if [ -s "$log_dir/ueransim.log" ]; then
+        (
+        awk '
+        function extract_bracket(s, result,    p1, p2) {
+            p1 = index(s, "[")
+            if (p1 == 0) return 0
+            p2 = index(s, "]")
+            if (p2 == 0) return 0
+            result[0] = substr(s, p1+1, p2-p1-1)
+            result[1] = substr(s, p2+1)
+            return 1
+        }
+        {
+            # Match: [2026-02-10 20:09:01.859]
+            if ($0 ~ /^\[[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]+\]/) {
+                # Extract timestamp from first bracket
+                inner = $0; sub(/^\[/, "", inner); sub(/\].*/, "", inner)
+                # inner = "2026-02-10 20:09:01.859"
+                split(inner, dt, " ")
+                split(dt[2], tp, ".")
+                frac = tp[2]
+                while (length(frac) < 9) frac = frac "0"
+                sort_key = tp[1] "." frac
+                rest = $0; sub(/^\[[^\]]*\] */, "", rest)
+                module = "gnb"; level = "info"; msg = rest
+                # Parse [module] [level] message
+                b1[0]=""; b2[0]=""
+                if (extract_bracket(rest, b1)) {
+                    module = b1[0]
+                    tmp = b1[1]; sub(/^ */, "", tmp)
+                    if (extract_bracket(tmp, b2)) {
+                        level = b2[0]
+                        msg = b2[1]; sub(/^ */, "", msg)
+                    }
+                }
+                printf "%s\t%s\t%s\t%s\t%s\n", sort_key, "UERANSIM", module, toupper(level), msg
+            }
+        }' "$log_dir/ueransim.log" > "${tmp_dir}/ueransim.tagged"
+        ) &
+    fi
+
+    wait
+
+    # Merge and sort chronologically
+    cat "${tmp_dir}"/*.tagged 2>/dev/null | sort -t$'\t' -k1,1 > "${tmp_dir}/merged.log"
+
+    echo "${tmp_dir}"
+}
+
+render_chronological_flow() {
+    # Renders a merged log file with color-coded NFs, request/response markers,
+    # and key event highlighting. Shows the full flow across all NFs.
+    #
+    # Args: merged_file trace_file [filter_pattern] [max_lines]
+    local merged_file="$1"
+    local trace_file="$2"
+    local filter_pattern="${3:-}"
+    local max_lines="${4:-0}"
+
+    [ -s "$merged_file" ] || return 0
+
+    local input_file="$merged_file"
+    local tmp_filtered=""
+
+    if [ -n "$filter_pattern" ]; then
+        tmp_filtered=$(mktemp)
+        grep -aE "$filter_pattern" "$merged_file" > "$tmp_filtered" 2>/dev/null || true
+        input_file="$tmp_filtered"
+    fi
+
+    # Header
+    local hdr
+    hdr=$(printf "%-12s %-5s %-9s %-12s %-5s  %s" "TIMESTAMP" "FLOW" "NF" "MODULE" "LVL" "MESSAGE")
+    echo -e "${BOLD}${hdr}${NC}"
+    echo "$hdr" >> "$trace_file"
+    local div="------------ ----- --------- ------------ -----  -----------------------------------------------"
+    echo "$div"
+    echo "$div" >> "$trace_file"
+
+    local line_count=0
+
+    while IFS=$'\t' read -r ts nf submod level message; do
+        [ -z "$ts" ] && continue
+
+        if [ "$max_lines" -gt 0 ] && [ "$line_count" -ge "$max_lines" ]; then
+            break
+        fi
+        ((line_count++))
+
+        # Truncate timestamp to milliseconds
+        local display_ts="${ts%${ts#*.???}}"
+
+        # Determine flow direction prefix:
+        #   >>> = outbound SBI request (POST, PUT to another NF)
+        #   <<< = inbound SBI response (GIN handler returning)
+        #   ==> = key registration/session milestone event
+        #   [!!] = error / rejection
+        #       = normal log line
+        local prefix="     "
+        if [[ "$message" =~ Handle\ Registration\ Request|Authentication\ procedure$|Send\ Authentication\ Request|Authentication\ Success|Send\ Security\ Mode\ Command|Handle\ Security\ Mode\ Complete|Send\ Registration\ Accept|Handle\ Registration\ Complete|ContextSetup\ Success|RRC\ Setup\ for\ UE|Initial\ Context\ Setup\ Request\ received|PDU\ session\ resource|RM-REGISTERED|PDU\ Session\ Establishment\ Accept|transition\ from ]]; then
+            prefix=" ==> "
+        elif [[ "$submod" == "GIN" && "$message" =~ POST|PUT|PATCH|DELETE ]]; then
+            prefix=" >>> "
+        elif [[ "$submod" == "GIN" ]]; then
+            prefix=" <<< "
+        elif [[ "$message" =~ Nausf_|Nudm_|Nudr_|Nsmf_|Npcf_|Nnssf_|nausf-auth|nudm-ueau|nudm-sdm|nudr-dr|nsmf-pdusession|npcf-smpolicy ]]; then
+            prefix=" --> "
+        elif [[ "$message" =~ [Ee]rror|[Ff]ail|[Rr]eject|Nil\ Permanent|not\ found ]]; then
+            prefix=" [!!]"
+        fi
+
+        # NF color
+        local color=""
+        case "$nf" in
+            UERANSIM) color="$CYAN" ;;
+            AMF)      color="$GREEN" ;;
+            AUSF)     color="${BOLD}${YELLOW}" ;;
+            UDM|UDR)  color="$YELLOW" ;;
+            NRF)      color="$NC" ;;
+            NSSF)     color="$NC" ;;
+            PCF)      color="$MAGENTA" ;;
+            SMF)      color="$BLUE" ;;
+            UPF)      color="${BOLD}${MAGENTA}" ;;
+        esac
+
+        local nf_pad
+        nf_pad=$(printf "%-9s" "$nf")
+        local sub_pad
+        sub_pad=$(printf "%-12s" "[$submod]")
+
+        # Console (colored)
+        printf "%s %s%s%s %s%s%s %s [%-4s]  %s\n" \
+            "$display_ts" "$color" "$prefix" "$NC" "$color" "$nf_pad" "$NC" "$sub_pad" "$level" "$message"
+
+        # File (plain)
+        printf "%s %s %-9s %-12s [%-4s]  %s\n" \
+            "$display_ts" "$prefix" "$nf" "[$submod]" "$level" "$message" >> "$trace_file"
+
+    done < "$input_file"
+
+    [ -n "$tmp_filtered" ] && rm -f "$tmp_filtered"
+
+    echo ""
+    echo -e "  ${YELLOW}[INFO]${NC} $line_count flow lines rendered"
+    echo "  [INFO] $line_count flow lines rendered" >> "$trace_file"
 }
 
 # ── Packet Capture (--trace mode) ──────────────────────────
@@ -647,9 +1059,9 @@ cmd_trace() {
             echo ""
             echo "Examples:"
             echo "  ./free5gc.sh trace list"
-            echo "  ./free5gc.sh trace rename 01-single-ue-registration my-test"
+            echo "  ./free5gc.sh trace rename full-test ue-attach-16-prod"
             echo "  ./free5gc.sh trace view 01-single-ue-registration"
-            echo "  ./free5gc.sh trace open 01-single-ue-registration"
+            echo "  ./free5gc.sh trace open full-test"
             echo "  FREE5GC_HOST=root@1.2.3.4 ./free5gc.sh trace list"
             ;;
     esac
@@ -1295,6 +1707,265 @@ cmd_test_simple() {
     cleanup_ue_processes
 }
 
+cmd_test_full() {
+    log "========================================="
+    log "  TEST FULL: 16 Attach + 200 Reject + 100 Identify"
+    log "========================================="
+    if $TRACE_ENABLED; then
+        log "Packet capture: ENABLED (pcap dir: $PCAP_DIR)"
+    fi
+    echo ""
+    echo "  Legend:  ==>  Key milestone    >>>  SBI request (POST/PUT)"
+    echo "          <<<  SBI response      -->  NF-to-NF call"
+    echo "          [!!] Error/rejection"
+    echo ""
+
+    # Verify containers
+    for container in free5gc-cp ueransim mongodb upf; do
+        if ! docker ps --format '{{.Names}}' | grep -q "^${container}$"; then
+            if [ "$container" = "upf" ]; then
+                log "WARNING: UPF not running (CP-only mode). PDU sessions will not be established."
+            else
+                log "ERROR: Container '$container' is not running. Run './free5gc.sh start' first."
+                exit 1
+            fi
+        fi
+    done
+
+    # Verify gNB connected
+    if ! docker logs --tail 500 ueransim 2>&1 | grep -q 'NG Setup procedure is successful'; then
+        log "ERROR: gNB not connected to AMF"
+        exit 1
+    fi
+
+    # Start packet capture for entire test
+    start_capture "full-test"
+
+    # ══════════════════════════════════════════════════════════
+    # Phase 1: 16 UE Attach
+    # ══════════════════════════════════════════════════════════
+    echo ""
+    echo -e "${CYAN}================================================================${NC}"
+    echo -e "${CYAN}  Phase 1: Attach $ATTACH_COUNT UEs (Registration + PDU Session)${NC}"
+    echo -e "${CYAN}================================================================${NC}"
+    echo ""
+
+    provision_multi_subscribers 1 "$ATTACH_COUNT" "attach test"
+
+    cleanup_ue_processes
+
+    local first_imsi
+    first_imsi=$(format_imsi 1)
+    log "Starting $ATTACH_COUNT UEs ($first_imsi to $(format_imsi $ATTACH_COUNT))..."
+    docker exec -d ueransim ./nr-ue \
+        -c ./config/uecfg.yaml \
+        -i "$first_imsi" \
+        -n "$ATTACH_COUNT" \
+        -t "$UE_SPAWN_DELAY_MS" \
+        -l -r
+
+    log "Waiting 25s for registrations..."
+    sleep 25
+
+    # Analyze results from gNB logs
+    local gnb_logs
+    gnb_logs=$(docker logs ueransim 2>&1 | tail -500)
+    local context_setups
+    context_setups=$(echo "$gnb_logs" | grep -c "Initial Context Setup Request received" || true)
+    local pdu_setups
+    pdu_setups=$(echo "$gnb_logs" | grep -c "PDU session resource(s) setup" || true)
+    local unique_pdu_ues
+    unique_pdu_ues=$(echo "$gnb_logs" | grep "PDU session resource(s) setup for UE" | \
+        sed 's/.*UE\[\([0-9]*\)\].*/\1/' | sort -un | wc -l)
+
+    echo ""
+    log_info "Initial Context Setups: $context_setups"
+    log_info "PDU Session Setups: $pdu_setups"
+    log_info "Unique UEs with PDU sessions: $unique_pdu_ues"
+
+    if [ "$context_setups" -ge "$ATTACH_COUNT" ]; then
+        log_pass "All $ATTACH_COUNT UEs registered ($context_setups context setups)"
+    elif [ "$context_setups" -gt 0 ]; then
+        log_fail "Only $context_setups/$ATTACH_COUNT UEs registered"
+    else
+        log_fail "No UEs registered (0 context setups)"
+    fi
+
+    if [ "$unique_pdu_ues" -ge "$ATTACH_COUNT" ]; then
+        log_pass "$unique_pdu_ues/$ATTACH_COUNT UEs have PDU sessions"
+    elif [ "$unique_pdu_ues" -gt 0 ]; then
+        log_fail "Only $unique_pdu_ues/$ATTACH_COUNT UEs got PDU sessions"
+    fi
+
+    cleanup_ue_processes
+
+    # ══════════════════════════════════════════════════════════
+    # Phase 2: 200 UE Reject
+    # ══════════════════════════════════════════════════════════
+    echo ""
+    echo -e "${CYAN}================================================================${NC}"
+    echo -e "${CYAN}  Phase 2: Reject $REJECT_COUNT Unprovisioned UEs${NC}"
+    echo -e "${CYAN}================================================================${NC}"
+    echo ""
+    # Ensure reject-range IMSIs are NOT provisioned
+    log "Ensuring reject-test IMSIs are NOT provisioned..."
+    docker exec mongodb mongo mongodb://localhost:27017/free5gc --quiet --eval "
+    var collections = [
+      'subscriptionData.authenticationData.authenticationSubscription',
+      'subscriptionData.provisionedData.amData',
+      'subscriptionData.provisionedData.smData',
+      'subscriptionData.provisionedData.smfSelectionSubscriptionData',
+      'policyData.ues.smData',
+      'policyData.ues.amData'
+    ];
+    collections.forEach(function(col) {
+      db[col].deleteMany({ ueId: { \$regex: /^imsi-00101000005(50|51|52)/ } });
+    });
+    " 2>/dev/null
+
+    cleanup_ue_processes
+
+    # Launch 200 UEs in batches of 50
+    local batch_size=50
+    local num_batches=$((REJECT_COUNT / batch_size))
+
+    log "Launching $REJECT_COUNT unprovisioned UEs in $num_batches batches..."
+    for ((batch = 0; batch < num_batches; batch++)); do
+        local batch_start=$((REJECT_IMSI_START + batch * batch_size))
+        local batch_imsi
+        batch_imsi=$(format_imsi "$batch_start")
+        log_info "Batch $((batch + 1))/$num_batches: 50 UEs from $batch_imsi"
+
+        docker exec -d ueransim ./nr-ue \
+            -c ./config/uecfg.yaml \
+            -i "$batch_imsi" \
+            -n "$batch_size" \
+            -t "$UE_SPAWN_DELAY_MS" \
+            -l -r
+
+        sleep 5
+    done
+
+    log "Waiting 30s for rejection procedures..."
+    sleep 30
+
+    # Analyze rejection results from gNB logs
+    local reject_gnb_logs
+    reject_gnb_logs=$(docker logs ueransim 2>&1 | tail -1000)
+    local reject_context
+    reject_context=$(echo "$reject_gnb_logs" | grep -c "Initial Context Setup Request received" || true)
+    local reject_rrc
+    reject_rrc=$(echo "$reject_gnb_logs" | grep -c "RRC Setup for UE\|new signal detected" || true)
+
+    echo ""
+    echo -e "${BOLD}--- Rejection Summary ---${NC}"
+    printf "  %-45s  %s\n" "RRC Setup attempts:" "$reject_rrc"
+    printf "  %-45s  ${GREEN}%s${NC}\n" "Initial Context Setups (should be 0):" "$reject_context"
+    echo ""
+
+    if [ "$reject_context" -eq 0 ] && [ "$reject_rrc" -gt 0 ]; then
+        log_pass "All $reject_rrc UE attempts rejected, 0 accepted"
+    elif [ "$reject_context" -gt 0 ]; then
+        log_fail "$reject_context UEs unexpectedly accepted"
+    else
+        log_fail "No UE connection attempts detected"
+    fi
+
+    cleanup_ue_processes
+
+    # ══════════════════════════════════════════════════════════
+    # Phase 3: 100 UE Identification
+    # ══════════════════════════════════════════════════════════
+    echo ""
+    echo -e "${CYAN}================================================================${NC}"
+    echo -e "${CYAN}  Phase 3: Identify $IDENTIFY_COUNT UEs (SUPI/5G-GUTI)${NC}"
+    echo -e "${CYAN}================================================================${NC}"
+    echo ""
+    provision_multi_subscribers "$IDENTIFY_IMSI_START" "$IDENTIFY_COUNT" "identification test"
+
+    cleanup_ue_processes
+
+    # Launch 100 UEs in batches of 50
+    local id_batch_size=50
+    local id_num_batches=$((IDENTIFY_COUNT / id_batch_size))
+
+    log "Launching $IDENTIFY_COUNT UEs for identification in $id_num_batches batches..."
+    for ((batch = 0; batch < id_num_batches; batch++)); do
+        local batch_start=$((IDENTIFY_IMSI_START + batch * id_batch_size))
+        local batch_imsi
+        batch_imsi=$(format_imsi "$batch_start")
+        log_info "Batch $((batch + 1))/$id_num_batches: $id_batch_size UEs from $batch_imsi"
+
+        docker exec -d ueransim ./nr-ue \
+            -c ./config/uecfg.yaml \
+            -i "$batch_imsi" \
+            -n "$id_batch_size" \
+            -t "$UE_SPAWN_DELAY_MS" \
+            -l -r
+
+        sleep 8
+    done
+
+    log "Waiting ${SETTLE_TIME}s for registrations to complete..."
+    sleep "$SETTLE_TIME"
+
+    # Analyze identification results from gNB logs
+    local id_gnb_logs
+    id_gnb_logs=$(docker logs ueransim 2>&1 | tail -1000)
+    local id_context_setups
+    id_context_setups=$(echo "$id_gnb_logs" | grep -c "Initial Context Setup Request received" || true)
+
+    echo ""
+    echo -e "${BOLD}--- Identification Summary ---${NC}"
+    printf "  %-45s  %s\n" "Initial Context Setups:" "$id_context_setups"
+    echo ""
+
+    if [ "$id_context_setups" -ge "$IDENTIFY_COUNT" ]; then
+        log_pass "All $IDENTIFY_COUNT UEs identified and registered ($id_context_setups context setups)"
+    elif [ "$id_context_setups" -ge $((IDENTIFY_COUNT * 80 / 100)) ]; then
+        log_pass "$id_context_setups/$IDENTIFY_COUNT UEs identified (>80% threshold)"
+    else
+        log_fail "Only $id_context_setups/$IDENTIFY_COUNT UEs identified"
+    fi
+
+    cleanup_ue_processes
+    cleanup_test_data
+
+    # Stop packet capture
+    stop_capture
+
+    # ══════════════════════════════════════════════════════════
+    # Final Summary
+    # ══════════════════════════════════════════════════════════
+    echo ""
+    echo -e "${CYAN}================================================================${NC}"
+    echo -e "${CYAN}  TEST SUMMARY${NC}"
+    echo -e "${CYAN}================================================================${NC}"
+    echo ""
+    echo -e "  ${CYAN}Total Tests:${NC}  $TOTAL_TESTS"
+    echo -e "  ${GREEN}Passed:${NC}       $TOTAL_PASS"
+    echo -e "  ${RED}Failed:${NC}       $TOTAL_FAIL"
+    echo ""
+
+    if [ "$TOTAL_FAIL" -eq 0 ]; then
+        echo -e "  ${GREEN}ALL TESTS PASSED${NC}"
+    else
+        echo -e "  ${RED}$TOTAL_FAIL TEST(S) FAILED${NC}"
+    fi
+
+    # Show pcap location
+    if $TRACE_ENABLED; then
+        echo ""
+        echo -e "  ${CYAN}Pcap saved:${NC} ${PCAP_DIR}/full-test.pcap"
+        echo "  Download: scp root@$(get_vm_ip):${PCAP_DIR}/*.pcap ."
+        echo "  View:     ./free5gc.sh trace view full-test"
+    fi
+    echo ""
+
+    [ "$TOTAL_FAIL" -gt 0 ] && exit 1
+    exit 0
+}
+
 cmd_stop() {
     log "Stopping all containers..."
     docker compose -f "$COMPOSE_FILE" down -v
@@ -1339,6 +2010,7 @@ show_usage() {
     echo "                        --quick: rebuild runtime images only"
     echo "  start                 Start containers + provision subscriber"
     echo "  test [--trace]        1 UE registration + pcap capture"
+    echo "  test full [--trace]   16 attach + 200 reject + 100 identify + pcap"
     echo "                        --trace: capture packets with tshark"
     echo "  trace list            List all saved pcap traces"
     echo "  trace view [name]     Decode & show trace payloads in terminal"
@@ -1355,8 +2027,9 @@ show_usage() {
     echo "  ./free5gc.sh start"
     echo "  ./free5gc.sh test --trace"
     echo "  ./free5gc.sh trace list"
-    echo "  ./free5gc.sh trace view 01-single-ue-registration"
+    echo "  ./free5gc.sh trace view full-test"
     echo "  ./free5gc.sh trace open"   # list traces + download cmd
+    echo "  ./free5gc.sh trace rename full-test prod-16ue-attach"
     echo "  ./free5gc.sh logs amf"
 }
 
@@ -1372,7 +2045,7 @@ done
 case "${1:-}" in
     build)  cmd_build "${2:-}" ;;
     start)  cmd_start ;;
-    test)   cmd_test_simple ;;
+    test)   if [ "${2:-}" = "full" ] || [ "${3:-}" = "full" ]; then cmd_test_full; else cmd_test_simple; fi ;;
     trace)  shift; cmd_trace "$@" ;;
     stop)   cmd_stop ;;
     status) cmd_status ;;
