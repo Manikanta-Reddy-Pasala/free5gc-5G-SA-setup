@@ -8,7 +8,9 @@
 # Usage:
 #   ./free5gc.sh build                # Compile all NFs from source (~15 min)
 #   ./free5gc.sh build --quick        # Rebuild runtime images only
-#   ./free5gc.sh start                # Start containers + provision subscriber
+#   ./free5gc.sh start                # Start all containers
+#   ./free5gc.sh capture start [name] # Start pcap capture (bridge + SBI)
+#   ./free5gc.sh capture stop         # Stop capture and save pcap
 #   ./free5gc.sh stop                 # Stop and remove all containers
 #   ./free5gc.sh status               # Show container status
 #   ./free5gc.sh logs [nf]            # Tail logs (all or specific NF)
@@ -21,14 +23,8 @@ cd "$SCRIPT_DIR"
 
 # ── Constants ───────────────────────────────────────────────
 COMPOSE_FILE="docker-compose-portable.yaml"
-IMSI="imsi-001010000050641"
-PLMN="00101"
-MCC="001"
-MNC="01"
-K="0c57e15a2cb86087097a6b50d42531de"
-OPC="109ee52735ae6d3849112cf4175029c7"
-SQN="000000000020"
-AMF_FIELD="8000"
+PCAP_DIR="${SCRIPT_DIR}/logs/pcap-traces"
+CAPTURE_IF="br-free5gc"
 
 # Colors
 RED=$'\033[0;31m'
@@ -65,137 +61,6 @@ wait_healthy() {
     done
     log "WARNING: $container health check timed out after ${max_wait}s"
     return 1
-}
-
-# ── Subscriber Provisioning ─────────────────────────────────
-
-provision_subscriber() {
-    # Provisions via WebUI API + MongoDB patches
-    local imsi="${1:-$IMSI}"
-    local plmn="${2:-$PLMN}"
-    local docker_network="${3:-}"
-
-    # Auto-detect network
-    if [ -z "$docker_network" ]; then
-        docker_network=$(docker network ls --format '{{.Name}}' | grep privnet | head -1)
-    fi
-    if [ -z "$docker_network" ]; then
-        log "ERROR: Could not detect Docker network. Is the stack running?"
-        return 1
-    fi
-
-    # Auto-detect port: use 5001 on macOS (port 5000 is used by AirPlay)
-    local webui_port=5000
-    if [ "$(uname)" = "Darwin" ]; then
-        webui_port=5001
-    fi
-
-    # Use the persistent WebUI container from docker-compose
-    if docker ps --filter name=webui --format '{{.Names}}' | grep -q "^webui$"; then
-        log "Using persistent WebUI container..."
-    else
-        log "WebUI container not running. Starting it..."
-        docker compose -f "$COMPOSE_FILE" up -d webui
-        sleep 5
-        if ! docker ps --filter name=webui --format '{{.Status}}' | grep -q "Up"; then
-            log "ERROR: WebUI failed to start"
-            return 1
-        fi
-    fi
-
-    # Login to get JWT token
-    log "Logging in to WebUI..."
-    local token
-    token=$(curl -s -X POST "http://localhost:${webui_port}/api/login" \
-        -H 'Content-Type: application/json' \
-        -d '{"username":"admin","password":"free5gc"}' | \
-        python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])" 2>/dev/null)
-
-    if [ -z "$token" ] || [ "$token" = "None" ]; then
-        log "ERROR: Failed to get JWT token from WebUI"
-        return 1
-    fi
-
-    # Create subscriber
-    log "Creating subscriber $imsi..."
-    local http_code
-    http_code=$(curl -s -o /dev/null -w "%{http_code}" \
-        -X POST "http://localhost:${webui_port}/api/subscriber/${imsi}/${plmn}" \
-        -H 'Content-Type: application/json' \
-        -H "Token: ${token}" \
-        -d "{
-  \"plmnID\": \"${plmn}\",
-  \"ueId\": \"${imsi}\",
-  \"AuthenticationSubscription\": {
-    \"authenticationMethod\": \"5G_AKA\",
-    \"permanentKey\": {\"permanentKeyValue\": \"${K}\", \"encryptionKey\": 0, \"encryptionAlgorithm\": 0},
-    \"sequenceNumber\": \"${SQN}\",
-    \"authenticationManagementField\": \"${AMF_FIELD}\",
-    \"milenage\": {\"op\": {\"opValue\": \"\", \"encryptionKey\": 0, \"encryptionAlgorithm\": 0}},
-    \"opc\": {\"opcValue\": \"${OPC}\", \"encryptionKey\": 0, \"encryptionAlgorithm\": 0}
-  },
-  \"AccessAndMobilitySubscriptionData\": {
-    \"gpsis\": [\"msisdn-0900000000\"],
-    \"subscribedUeAmbr\": {\"downlink\": \"2 Gbps\", \"uplink\": \"1 Gbps\"},
-    \"nssai\": {
-      \"defaultSingleNssais\": [{\"sst\": 3, \"sd\": \"198153\"}]
-    }
-  },
-  \"SessionManagementSubscriptionData\": [
-    {
-      \"singleNssai\": {\"sst\": 3, \"sd\": \"198153\"},
-      \"dnnConfigurations\": {
-        \"internet\": {
-          \"pduSessionTypes\": {\"defaultSessionType\": \"IPV4\"},
-          \"sscModes\": {\"defaultSscMode\": \"SSC_MODE_1\"},
-          \"5gQosProfile\": {\"5qi\": 9, \"arp\": {\"priorityLevel\": 8, \"preemptCap\": \"\", \"preemptVuln\": \"\"}},
-          \"sessionAmbr\": {\"downlink\": \"200 Mbps\", \"uplink\": \"100 Mbps\"}
-        }
-      }
-    }
-  ],
-  \"SmfSelectionSubscriptionData\": {
-    \"subscribedSnssaiInfos\": {
-      \"03198153\": {\"dnnInfos\": [{\"dnn\": \"internet\"}]}
-    }
-  }
-}")
-
-    if [ "$http_code" = "201" ] || [ "$http_code" = "200" ]; then
-        log "Subscriber created via WebUI (HTTP $http_code)"
-    elif [ "$http_code" = "409" ]; then
-        log "Subscriber already exists (HTTP 409) - continuing with patches"
-    else
-        log "WARNING: Unexpected HTTP $http_code from WebUI. Continuing with patches..."
-    fi
-
-    # Patch MongoDB: add allowedSessionTypes
-    log "Patching MongoDB: adding allowedSessionTypes..."
-    docker exec mongodb mongo mongodb://localhost:27017/free5gc --quiet --eval "
-db['subscriptionData.provisionedData.smData'].updateMany(
-  { ueId: '${imsi}' },
-  { \$set: { 'dnnConfigurations.internet.pduSessionTypes.allowedSessionTypes': ['IPV4'] } }
-)" 2>&1 | grep -v "^$"
-
-    # Patch MongoDB: populate smPolicySnssaiData
-    log "Patching MongoDB: populating smPolicySnssaiData..."
-    docker exec mongodb mongo mongodb://localhost:27017/free5gc --quiet --eval "
-db['policyData.ues.smData'].updateOne(
-  { ueId: '${imsi}' },
-  {
-    \$set: {
-      smPolicySnssaiData: {
-        '03198153': {
-          snssai: { sst: 3, sd: '198153' },
-          smPolicyDnnData: { internet: { dnn: 'internet' } }
-        }
-      }
-    }
-  },
-  { upsert: true }
-)" 2>&1 | grep -v "^$"
-
-    log "Subscriber $imsi provisioned."
 }
 
 # ── Commands ────────────────────────────────────────────────
@@ -264,20 +129,14 @@ cmd_start() {
     mkdir -p logs/cp logs/upf
 
     # Start all containers (CP + UPF + UERANSIM)
-    log "Step 1/4: Starting containers..."
+    log "Step 1/3: Starting containers..."
     docker compose -f "$COMPOSE_FILE" up -d
 
     # Wait for CP health
-    log "Step 2/4: Waiting for Control Plane to be healthy..."
+    log "Step 2/3: Waiting for Control Plane to be healthy..."
     wait_healthy "free5gc-cp" 120 || {
         log "Container logs:"
         docker logs free5gc-cp --tail 20 2>&1 | head -20
-    }
-
-    # Provision subscriber
-    log "Step 3/4: Provisioning default subscriber..."
-    provision_subscriber "$IMSI" "$PLMN" || {
-        log "WARNING: Subscriber provisioning failed. May need manual setup."
     }
 
     # Restart UERANSIM to ensure gNB connects after AMF NGAP is ready
@@ -286,7 +145,7 @@ cmd_start() {
     sleep 5
 
     # Show status
-    log "Step 4/4: Deployment status"
+    log "Step 3/3: Deployment status"
     echo ""
     docker compose -f "$COMPOSE_FILE" ps
     echo ""
@@ -299,6 +158,114 @@ cmd_start() {
     log "Logs:   ./free5gc.sh logs"
     log "Stop:   ./free5gc.sh stop"
     echo ""
+}
+
+cmd_capture() {
+    local subcmd="${1:-start}"
+    local name="${2:-capture-$(date +%Y%m%d-%H%M%S)}"
+
+    if ! command -v tshark &>/dev/null; then
+        log "ERROR: tshark not installed. Run: apt-get install -y tshark"
+        exit 1
+    fi
+
+    case "$subcmd" in
+        start)
+            mkdir -p "$PCAP_DIR"
+            chmod 777 "$PCAP_DIR" 2>/dev/null || true
+
+            # Kill any leftover tshark
+            pkill -f "tshark.*${CAPTURE_IF}" 2>/dev/null || true
+            pkill -f "tshark.*pcap-traces" 2>/dev/null || true
+            sleep 1
+
+            local pcap_file="${PCAP_DIR}/${name}.pcap"
+            local sbi_pcap_file="${PCAP_DIR}/${name}-sbi.pcap"
+
+            # Capture bridge: NGAP (SCTP), PFCP (UDP 8805), GTP-U (UDP 2152)
+            tshark -i "$CAPTURE_IF" -w "$pcap_file" \
+                -f "sctp or udp port 8805 or udp port 2152" \
+                -q </dev/null >/dev/null 2>&1 &
+            local bridge_pid=$!
+
+            # Capture SBI/HTTP2 on loopback inside free5gc-cp container
+            local sbi_pid=0
+            local cp_pid
+            cp_pid=$(docker inspect --format '{{.State.Pid}}' free5gc-cp 2>/dev/null || echo "")
+            if [ -n "$cp_pid" ] && [ "$cp_pid" != "0" ]; then
+                nsenter -t "$cp_pid" -n tshark -i lo -w "$sbi_pcap_file" \
+                    -f "tcp portrange 8000-8007" \
+                    -q </dev/null >/dev/null 2>&1 &
+                sbi_pid=$!
+            fi
+
+            sleep 2
+
+            if kill -0 "$bridge_pid" 2>/dev/null; then
+                log "Bridge capture started: $pcap_file (PID: $bridge_pid)"
+            else
+                log "ERROR: Failed to start bridge capture"
+                exit 1
+            fi
+            if [ "$sbi_pid" -ne 0 ] && kill -0 "$sbi_pid" 2>/dev/null; then
+                log "SBI capture started: $sbi_pcap_file (PID: $sbi_pid)"
+            fi
+
+            # Save PIDs for stop
+            echo "$bridge_pid" > "${PCAP_DIR}/.bridge_pid"
+            echo "$sbi_pid" > "${PCAP_DIR}/.sbi_pid"
+            echo "$name" > "${PCAP_DIR}/.capture_name"
+
+            log "Capture running. Stop with: ./free5gc.sh capture stop"
+            ;;
+
+        stop)
+            local bridge_pid=0 sbi_pid=0 cap_name="capture"
+
+            [ -f "${PCAP_DIR}/.bridge_pid" ] && bridge_pid=$(cat "${PCAP_DIR}/.bridge_pid")
+            [ -f "${PCAP_DIR}/.sbi_pid" ] && sbi_pid=$(cat "${PCAP_DIR}/.sbi_pid")
+            [ -f "${PCAP_DIR}/.capture_name" ] && cap_name=$(cat "${PCAP_DIR}/.capture_name")
+
+            if [ "$bridge_pid" -ne 0 ] 2>/dev/null && kill -0 "$bridge_pid" 2>/dev/null; then
+                kill "$bridge_pid" 2>/dev/null
+                wait "$bridge_pid" 2>/dev/null || true
+                log "Bridge capture stopped"
+            fi
+            if [ "$sbi_pid" -ne 0 ] 2>/dev/null && kill -0 "$sbi_pid" 2>/dev/null; then
+                kill "$sbi_pid" 2>/dev/null
+                wait "$sbi_pid" 2>/dev/null || true
+                log "SBI capture stopped"
+            fi
+
+            sleep 1
+
+            # Merge bridge + SBI pcaps
+            local sbi_file="${PCAP_DIR}/${cap_name}-sbi.pcap"
+            local base_file="${PCAP_DIR}/${cap_name}.pcap"
+            if [ -f "$sbi_file" ] && [ -f "$base_file" ]; then
+                local merged_file="${PCAP_DIR}/${cap_name}-merged.pcap"
+                if mergecap -w "$merged_file" "$base_file" "$sbi_file" 2>/dev/null; then
+                    mv "$merged_file" "$base_file"
+                    rm -f "$sbi_file"
+                    log "Merged SBI traffic into $(basename "$base_file")"
+                fi
+            fi
+
+            chmod 644 "${PCAP_DIR}"/*.pcap 2>/dev/null || true
+            rm -f "${PCAP_DIR}/.bridge_pid" "${PCAP_DIR}/.sbi_pid" "${PCAP_DIR}/.capture_name"
+
+            if [ -f "$base_file" ]; then
+                local pkt_count
+                pkt_count=$(tshark -r "$base_file" 2>/dev/null | wc -l)
+                log "Pcap saved: $base_file ($pkt_count packets)"
+                log "Download: scp root@$(hostname -I | awk '{print $1}'):${base_file} ."
+            fi
+            ;;
+
+        *)
+            echo "Usage: ./free5gc.sh capture <start|stop> [name]"
+            ;;
+    esac
 }
 
 cmd_stop() {
@@ -343,7 +310,9 @@ show_usage() {
     echo "Commands:"
     echo "  build [--quick]       Build all NFs from source (~15 min)"
     echo "                        --quick: rebuild runtime images only"
-    echo "  start                 Start containers + provision subscriber"
+    echo "  start                 Start all containers"
+    echo "  capture start [name]  Start pcap capture (bridge + SBI)"
+    echo "  capture stop          Stop capture, merge and save pcap"
     echo "  stop                  Stop and remove all containers"
     echo "  status                Show container status"
     echo "  logs [nf]             Tail logs (all or specific: amf, smf, etc.)"
@@ -351,6 +320,8 @@ show_usage() {
     echo "Examples:"
     echo "  ./free5gc.sh build"
     echo "  ./free5gc.sh start"
+    echo "  ./free5gc.sh capture start my-test"
+    echo "  ./free5gc.sh capture stop"
     echo "  ./free5gc.sh stop"
     echo "  ./free5gc.sh logs amf"
 }
@@ -360,6 +331,7 @@ show_usage() {
 case "${1:-}" in
     build)  cmd_build "${2:-}" ;;
     start)  cmd_start ;;
+    capture) shift; cmd_capture "$@" ;;
     stop)   cmd_stop ;;
     status) cmd_status ;;
     logs)   cmd_logs "${2:-}" ;;
