@@ -30,12 +30,12 @@ cd "$SCRIPT_DIR"
 
 # ── Constants ───────────────────────────────────────────────
 COMPOSE_FILE="docker-compose-portable.yaml"
-IMSI="imsi-208930000000001"
-PLMN="20893"
-MCC="208"
-MNC="93"
-K="8baf473f2f8fd09487cccbd7097c6862"
-OPC="8e27b6af0e692e750f32667a3b14605d"
+IMSI="imsi-001010000050641"
+PLMN="00101"
+MCC="001"
+MNC="01"
+K="0c57e15a2cb86087097a6b50d42531de"
+OPC="109ee52735ae6d3849112cf4175029c7"
 SQN="000000000020"
 AMF_FIELD="8000"
 WEBUI_IMAGE="free5gc/webui:v4.2.0"
@@ -220,12 +220,12 @@ provision_subscriber() {
     \"gpsis\": [\"msisdn-0900000000\"],
     \"subscribedUeAmbr\": {\"downlink\": \"2 Gbps\", \"uplink\": \"1 Gbps\"},
     \"nssai\": {
-      \"defaultSingleNssais\": [{\"sst\": 1, \"sd\": \"010203\"}, {\"sst\": 1, \"sd\": \"112233\"}]
+      \"defaultSingleNssais\": [{\"sst\": 3, \"sd\": \"198153\"}, {\"sst\": 3, \"sd\": \"198153\"}]
     }
   },
   \"SessionManagementSubscriptionData\": [
     {
-      \"singleNssai\": {\"sst\": 1, \"sd\": \"010203\"},
+      \"singleNssai\": {\"sst\": 3, \"sd\": \"198153\"},
       \"dnnConfigurations\": {
         \"internet\": {
           \"pduSessionTypes\": {\"defaultSessionType\": \"IPV4\"},
@@ -236,7 +236,7 @@ provision_subscriber() {
       }
     },
     {
-      \"singleNssai\": {\"sst\": 1, \"sd\": \"112233\"},
+      \"singleNssai\": {\"sst\": 3, \"sd\": \"198153\"},
       \"dnnConfigurations\": {
         \"internet\": {
           \"pduSessionTypes\": {\"defaultSessionType\": \"IPV4\"},
@@ -249,8 +249,8 @@ provision_subscriber() {
   ],
   \"SmfSelectionSubscriptionData\": {
     \"subscribedSnssaiInfos\": {
-      \"01010203\": {\"dnnInfos\": [{\"dnn\": \"internet\"}]},
-      \"01112233\": {\"dnnInfos\": [{\"dnn\": \"internet\"}]}
+      \"03198153\": {\"dnnInfos\": [{\"dnn\": \"internet\"}]},
+      \"03198153\": {\"dnnInfos\": [{\"dnn\": \"internet\"}]}
     }
   }
 }")
@@ -283,12 +283,12 @@ db['policyData.ues.smData'].updateOne(
   {
     \$set: {
       smPolicySnssaiData: {
-        '01010203': {
-          snssai: { sst: 1, sd: '010203' },
+        '03198153': {
+          snssai: { sst: 3, sd: '198153' },
           smPolicyDnnData: { internet: { dnn: 'internet' } }
         },
-        '01112233': {
-          snssai: { sst: 1, sd: '112233' },
+        '03198153': {
+          snssai: { sst: 3, sd: '198153' },
           smPolicyDnnData: { internet: { dnn: 'internet' } }
         }
       }
@@ -326,15 +326,15 @@ provision_subscriber_direct() {
           ueId: '${imsi}', servingPlmnId: '${PLMN}',
           gpsis: ['msisdn-0900000000'],
           subscribedUeAmbr: { downlink: '2 Gbps', uplink: '1 Gbps' },
-          nssai: { defaultSingleNssais: [{ sst: 1, sd: '010203' }, { sst: 1, sd: '112233' }] }
+          nssai: { defaultSingleNssais: [{ sst: 3, sd: '198153' }, { sst: 3, sd: '198153' }] }
       }},
       { upsert: true }
     );
     db['subscriptionData.provisionedData.smData'].updateOne(
-      { ueId: '${imsi}', servingPlmnId: '${PLMN}', 'singleNssai.sst': 1, 'singleNssai.sd': '010203' },
+      { ueId: '${imsi}', servingPlmnId: '${PLMN}', 'singleNssai.sst': 3, 'singleNssai.sd': '198153' },
       { \$set: {
           ueId: '${imsi}', servingPlmnId: '${PLMN}',
-          singleNssai: { sst: 1, sd: '010203' },
+          singleNssai: { sst: 3, sd: '198153' },
           dnnConfigurations: { internet: {
             pduSessionTypes: { defaultSessionType: 'IPV4', allowedSessionTypes: ['IPV4'] },
             sscModes: { defaultSscMode: 'SSC_MODE_1' },
@@ -345,10 +345,10 @@ provision_subscriber_direct() {
       { upsert: true }
     );
     db['subscriptionData.provisionedData.smData'].updateOne(
-      { ueId: '${imsi}', servingPlmnId: '${PLMN}', 'singleNssai.sst': 1, 'singleNssai.sd': '112233' },
+      { ueId: '${imsi}', servingPlmnId: '${PLMN}', 'singleNssai.sst': 3, 'singleNssai.sd': '198153' },
       { \$set: {
           ueId: '${imsi}', servingPlmnId: '${PLMN}',
-          singleNssai: { sst: 1, sd: '112233' },
+          singleNssai: { sst: 3, sd: '198153' },
           dnnConfigurations: { internet: {
             pduSessionTypes: { defaultSessionType: 'IPV4', allowedSessionTypes: ['IPV4'] },
             sscModes: { defaultSscMode: 'SSC_MODE_1' },
@@ -363,8 +363,8 @@ provision_subscriber_direct() {
       { \$set: {
           ueId: '${imsi}', servingPlmnId: '${PLMN}',
           subscribedSnssaiInfos: {
-            '01010203': { dnnInfos: [{ dnn: 'internet' }] },
-            '01112233': { dnnInfos: [{ dnn: 'internet' }] }
+            '03198153': { dnnInfos: [{ dnn: 'internet' }] },
+            '03198153': { dnnInfos: [{ dnn: 'internet' }] }
           }
       }},
       { upsert: true }
@@ -374,8 +374,8 @@ provision_subscriber_direct() {
       { \$set: {
           ueId: '${imsi}',
           smPolicySnssaiData: {
-            '01010203': { snssai: { sst: 1, sd: '010203' }, smPolicyDnnData: { internet: { dnn: 'internet' } } },
-            '01112233': { snssai: { sst: 1, sd: '112233' }, smPolicyDnnData: { internet: { dnn: 'internet' } } }
+            '03198153': { snssai: { sst: 3, sd: '198153' }, smPolicyDnnData: { internet: { dnn: 'internet' } } },
+            '03198153': { snssai: { sst: 3, sd: '198153' }, smPolicyDnnData: { internet: { dnn: 'internet' } } }
           }
       }},
       { upsert: true }
