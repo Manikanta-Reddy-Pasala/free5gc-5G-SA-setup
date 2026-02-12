@@ -9,6 +9,7 @@
 #   ./free5gc.sh build                # Compile all NFs from source (~15 min)
 #   ./free5gc.sh build --quick        # Rebuild runtime images only
 #   ./free5gc.sh start                # Start all containers
+#   ./free5gc.sh start --debug        # Start with debug-level logging
 #   ./free5gc.sh capture start [name] # Start pcap capture (bridge + SBI)
 #   ./free5gc.sh capture stop         # Stop capture and save pcap
 #   ./free5gc.sh stop                 # Stop and remove all containers
@@ -161,7 +162,21 @@ cmd_build() {
 }
 
 cmd_start() {
+    local debug=false
+    if [ "${1:-}" = "--debug" ]; then
+        debug=true
+    fi
+
     mkdir -p logs/cp logs/upf
+
+    # Set config directory based on debug flag
+    if [ "$debug" = true ]; then
+        export CONFIG_DIR="config-debug"
+        log "Mode: DEBUG (config-debug/ with debug-level logging)"
+    else
+        export CONFIG_DIR="config"
+        log "Mode: NORMAL (config/ with info-level logging)"
+    fi
 
     # Start all containers (CP + UPF + UERANSIM)
     log "Step 1/3: Starting containers..."
@@ -351,7 +366,8 @@ show_usage() {
     echo "Commands:"
     echo "  build [--quick]       Build all NFs from source (~15 min)"
     echo "                        --quick: rebuild runtime images only"
-    echo "  start                 Start all containers"
+    echo "  start [--debug]       Start all containers"
+    echo "                        --debug: use debug-level logging configs"
     echo "  capture start [name]  Start pcap capture (bridge + SBI)"
     echo "  capture stop          Stop capture, merge and save pcap"
     echo "  stop                  Stop and remove all containers"
@@ -361,6 +377,7 @@ show_usage() {
     echo "Examples:"
     echo "  ./free5gc.sh build"
     echo "  ./free5gc.sh start"
+    echo "  ./free5gc.sh start --debug"
     echo "  ./free5gc.sh capture start my-test"
     echo "  ./free5gc.sh capture stop"
     echo "  ./free5gc.sh stop"
@@ -371,7 +388,7 @@ show_usage() {
 
 case "${1:-}" in
     build)  cmd_build "${2:-}" ;;
-    start)  cmd_start ;;
+    start)  cmd_start "${2:-}" ;;
     capture) shift; cmd_capture "$@" ;;
     stop)   cmd_stop ;;
     status) cmd_status ;;

@@ -4,13 +4,13 @@
 # Same 5-container consolidated approach, but using binaries
 # built locally via Dockerfile.build-all.
 #
-# Configs from config-debug/ (debug logging enabled).
+# Configs from config/ (default) or config-debug/ (with --debug flag).
 # Logs mounted to ./logs/ for easy access.
 #
 # Usage:
-#   ./free5gc.sh build   # Build all binaries from source
-#   ./free5gc.sh start   # Start, provision subscriber, verify
-#   ./free5gc.sh test    # Test UE registration with NF trace
+#   ./free5gc.sh build          # Build all binaries from source
+#   ./free5gc.sh start          # Start with info-level logging
+#   ./free5gc.sh start --debug  # Start with debug-level logging
 # ============================================================
 
 services:
@@ -37,16 +37,16 @@ services:
       context: .
       dockerfile: Dockerfile.cp-local
     volumes:
-      # Debug-level NF configs
-      - ./config-debug/nrfcfg.yaml:/free5gc/config/nrfcfg.yaml
-      - ./config-debug/amfcfg.yaml:/free5gc/config/amfcfg.yaml
-      - ./config-debug/ausfcfg.yaml:/free5gc/config/ausfcfg.yaml
-      - ./config-debug/udmcfg.yaml:/free5gc/config/udmcfg.yaml
-      - ./config-debug/udrcfg.yaml:/free5gc/config/udrcfg.yaml
-      - ./config-debug/smfcfg.yaml:/free5gc/config/smfcfg.yaml
-      - ./config-debug/nssfcfg.yaml:/free5gc/config/nssfcfg.yaml
-      - ./config-debug/pcfcfg.yaml:/free5gc/config/pcfcfg.yaml
-      - ./config-debug/uerouting.yaml:/free5gc/config/uerouting.yaml
+      # NF configs - CONFIG_DIR defaults to config/, use config-debug/ for debug logging
+      - ./${CONFIG_DIR:-config}/nrfcfg.yaml:/free5gc/config/nrfcfg.yaml
+      - ./${CONFIG_DIR:-config}/amfcfg.yaml:/free5gc/config/amfcfg.yaml
+      - ./${CONFIG_DIR:-config}/ausfcfg.yaml:/free5gc/config/ausfcfg.yaml
+      - ./${CONFIG_DIR:-config}/udmcfg.yaml:/free5gc/config/udmcfg.yaml
+      - ./${CONFIG_DIR:-config}/udrcfg.yaml:/free5gc/config/udrcfg.yaml
+      - ./${CONFIG_DIR:-config}/smfcfg.yaml:/free5gc/config/smfcfg.yaml
+      - ./${CONFIG_DIR:-config}/nssfcfg.yaml:/free5gc/config/nssfcfg.yaml
+      - ./${CONFIG_DIR:-config}/pcfcfg.yaml:/free5gc/config/pcfcfg.yaml
+      - ./${CONFIG_DIR:-config}/uerouting.yaml:/free5gc/config/uerouting.yaml
       - ./cert:/free5gc/cert
       # Mount logs to host for easy access
       - ./logs/cp:/var/log/free5gc
@@ -85,7 +85,7 @@ services:
       context: .
       dockerfile: Dockerfile.upf-local
     volumes:
-      - ./config-debug/upfcfg.yaml:/free5gc/config/upfcfg.yaml
+      - ./${CONFIG_DIR:-config}/upfcfg.yaml:/free5gc/config/upfcfg.yaml
       - ./logs/upf:/var/log/free5gc
     cap_add:
       - NET_ADMIN
