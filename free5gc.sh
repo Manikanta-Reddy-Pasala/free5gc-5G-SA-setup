@@ -153,7 +153,7 @@ cmd_start() {
     log "  free5GC IS RUNNING"
     log "========================================="
     echo ""
-    log "WebUI:  http://$(hostname -I | awk '{print $1}'):5000"
+    log "WebUI:  http://$(hostname -I | awk '{print $1}'):4000"
     log "        Login: admin / free5gc"
     log "Logs:   ./free5gc.sh logs"
     log "Stop:   ./free5gc.sh stop"

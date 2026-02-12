@@ -11,7 +11,7 @@ configuration:
   webServer:
     scheme: http
     ipv4Address: 0.0.0.0
-    port: 5000
+    port: 4000
   billingServer:
     enable: true
     hostIPv4: webui
