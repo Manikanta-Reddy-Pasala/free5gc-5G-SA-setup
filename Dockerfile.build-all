@@ -31,6 +31,10 @@ RUN git clone --recursive -b v4.2.0 --depth 1 https://github.com/free5gc/free5gc
 
 WORKDIR /src/free5gc
 
+# Replace UDM with forked version containing SQN resync fix
+RUN rm -rf NFs/udm \
+    && git clone -b sqn-resync-fix --depth 1 https://github.com/Manikanta-Reddy-Pasala/udm.git NFs/udm
+
 # Build all control plane NFs (using subshells to avoid cd issues)
 RUN mkdir -p /output/cp && \
     for nf in nrf amf ausf udm udr smf nssf pcf; do \
