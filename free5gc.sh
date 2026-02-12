@@ -161,27 +161,17 @@ provision_subscriber() {
         webui_port=5001
     fi
 
-    log "Starting temporary WebUI container..."
-    docker rm -f webui-temp 2>/dev/null || true
-
-    if [ ! -f "./config/webuicfg.yaml" ]; then
-        log "ERROR: config/webuicfg.yaml not found. Run from the project root."
-        return 1
-    fi
-
-    docker run -d --name webui-temp \
-        --network "$docker_network" \
-        -v "$(pwd)/config/webuicfg.yaml:/free5gc/config/webuicfg.yaml" \
-        -v "$(pwd)/cert:/free5gc/cert" \
-        -e GIN_MODE=release \
-        -p "${webui_port}:5000" \
-        "$WEBUI_IMAGE" ./webui -c ./config/webuicfg.yaml
-    sleep 5
-
-    if ! docker ps --filter name=webui-temp --format '{{.Status}}' | grep -q "Up"; then
-        log "ERROR: WebUI failed to start"
-        docker rm -f webui-temp 2>/dev/null
-        return 1
+    # Use the persistent WebUI container from docker-compose
+    if docker ps --filter name=webui --format '{{.Names}}' | grep -q "^webui$"; then
+        log "Using persistent WebUI container..."
+    else
+        log "WebUI container not running. Starting it..."
+        docker compose -f "$COMPOSE_FILE" up -d webui
+        sleep 5
+        if ! docker ps --filter name=webui --format '{{.Status}}' | grep -q "Up"; then
+            log "ERROR: WebUI failed to start"
+            return 1
+        fi
     fi
 
     # Login to get JWT token
@@ -194,7 +184,6 @@ provision_subscriber() {
 
     if [ -z "$token" ] || [ "$token" = "None" ]; then
         log "ERROR: Failed to get JWT token from WebUI"
-        docker rm -f webui-temp 2>/dev/null
         return 1
     fi
 
@@ -262,10 +251,6 @@ provision_subscriber() {
     else
         log "WARNING: Unexpected HTTP $http_code from WebUI. Continuing with patches..."
     fi
-
-    # Stop WebUI
-    docker stop webui-temp >/dev/null 2>&1
-    docker rm webui-temp >/dev/null 2>&1
 
     # Patch MongoDB: add allowedSessionTypes
     log "Patching MongoDB: adding allowedSessionTypes..."
@@ -1809,6 +1794,8 @@ cmd_start() {
     log "  free5GC IS RUNNING"
     log "========================================="
     echo ""
+    log "WebUI:  http://$(hostname -I | awk '{print $1}'):5000"
+    log "        Login: admin / free5gc"
     log "Test:   ./free5gc.sh test"
     log "Logs:   ./free5gc.sh logs"
     log "Stop:   ./free5gc.sh stop"

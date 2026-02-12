@@ -1,7 +1,7 @@
 # ============================================================
 # free5GC Portable Deployment - Built from Source
 # ============================================================
-# Same 4-container consolidated approach, but using binaries
+# Same 5-container consolidated approach, but using binaries
 # built locally via Dockerfile.build-all.
 #
 # Configs from config-debug/ (debug logging enabled).
@@ -92,6 +92,28 @@ services:
         aliases:
           - upf.free5gc.org
     depends_on:
+      free5gc-cp:
+        condition: service_healthy
+
+  # ── Container 4: WebUI (Management Console) ──────────────
+  webui:
+    container_name: webui
+    image: free5gc/webui:v4.2.0
+    command: ./webui -c ./config/webuicfg.yaml
+    volumes:
+      - ./config/webuicfg.yaml:/free5gc/config/webuicfg.yaml
+      - ./cert:/free5gc/cert
+    environment:
+      GIN_MODE: release
+    ports:
+      - "5000:5000"
+    networks:
+      privnet:
+        aliases:
+          - webui.free5gc.org
+    depends_on:
+      db:
+        condition: service_started
       free5gc-cp:
         condition: service_healthy
 
