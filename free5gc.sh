@@ -25,6 +25,8 @@ cd "$SCRIPT_DIR"
 COMPOSE_FILE="docker-compose-portable.yaml"
 PCAP_DIR="${SCRIPT_DIR}/logs/pcap-traces"
 CAPTURE_IF="br-free5gc"
+AMF_IP="10.100.200.16"
+NGAP_PORT="38412"
 
 # Colors
 RED=$'\033[0;31m'
@@ -61,6 +63,39 @@ wait_healthy() {
     done
     log "WARNING: $container health check timed out after ${max_wait}s"
     return 1
+}
+
+setup_sctp_forward() {
+    # Docker can't proxy SCTP. Use iptables to DNAT host:38412 -> AMF container.
+    # Clean up any existing rules first
+    cleanup_sctp_forward 2>/dev/null
+
+    # Load SCTP kernel module
+    modprobe sctp 2>/dev/null || true
+
+    # DNAT: incoming SCTP 38412 on any host interface -> AMF inside Docker
+    iptables -t nat -A PREROUTING -p sctp --dport "$NGAP_PORT" -j DNAT --to-destination "${AMF_IP}:${NGAP_PORT}"
+
+    # Also handle locally-originated traffic (e.g. from the host itself)
+    iptables -t nat -A OUTPUT -p sctp --dport "$NGAP_PORT" -j DNAT --to-destination "${AMF_IP}:${NGAP_PORT}"
+
+    # Allow forwarded SCTP traffic to reach the Docker bridge
+    iptables -A FORWARD -p sctp -d "$AMF_IP" --dport "$NGAP_PORT" -j ACCEPT
+    iptables -A FORWARD -p sctp -s "$AMF_IP" --sport "$NGAP_PORT" -j ACCEPT
+
+    # Verify
+    if ss -Slnp 2>/dev/null | grep -q "$NGAP_PORT"; then
+        log "  SCTP ${NGAP_PORT} listening (AMF native)"
+    else
+        log "  SCTP DNAT rules added (host:${NGAP_PORT} -> ${AMF_IP}:${NGAP_PORT})"
+    fi
+}
+
+cleanup_sctp_forward() {
+    iptables -t nat -D PREROUTING -p sctp --dport "$NGAP_PORT" -j DNAT --to-destination "${AMF_IP}:${NGAP_PORT}" 2>/dev/null || true
+    iptables -t nat -D OUTPUT -p sctp --dport "$NGAP_PORT" -j DNAT --to-destination "${AMF_IP}:${NGAP_PORT}" 2>/dev/null || true
+    iptables -D FORWARD -p sctp -d "$AMF_IP" --dport "$NGAP_PORT" -j ACCEPT 2>/dev/null || true
+    iptables -D FORWARD -p sctp -s "$AMF_IP" --sport "$NGAP_PORT" -j ACCEPT 2>/dev/null || true
 }
 
 # ── Commands ────────────────────────────────────────────────
@@ -138,6 +173,10 @@ cmd_start() {
         log "Container logs:"
         docker logs free5gc-cp --tail 20 2>&1 | head -20
     }
+
+    # Setup SCTP forwarding for NGAP (Docker can't proxy SCTP)
+    log "Setting up SCTP port forwarding for NGAP (${NGAP_PORT} -> ${AMF_IP})..."
+    setup_sctp_forward
 
     # Restart UERANSIM to ensure gNB connects after AMF NGAP is ready
     log "Restarting UERANSIM to ensure gNB-AMF connection..."
@@ -269,6 +308,8 @@ cmd_capture() {
 }
 
 cmd_stop() {
+    log "Cleaning up SCTP forwarding rules..."
+    cleanup_sctp_forward
     log "Stopping all containers..."
     docker compose -f "$COMPOSE_FILE" down -v
     log "All containers stopped and volumes removed."
