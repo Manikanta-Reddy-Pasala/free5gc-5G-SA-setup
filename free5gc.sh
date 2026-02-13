@@ -45,7 +45,7 @@ AMF_FIELD="8000"
 SST=3
 SD="198153"
 DNN="internet"
-UE_SUBNET="10.10.168.0/24"
+UE_SUBNET="10.206.0.0/16"
 UPF_IP="10.100.200.4"
 WEBUI_PORT=4000
 
@@ -183,7 +183,7 @@ cmd_build() {
 
 setup_dataplane() {
     # Setup host-side routing and NAT so UE traffic can reach the internet
-    # UPF assigns UEs IPs from 10.10.168.0/24. Traffic flows:
+    # UPF assigns UEs IPs from 10.206.0.0/16. Traffic flows:
     #   UE -> gNB -> GTP-U tunnel -> UPF (decap) -> host -> internet
     # Host needs: route to UE subnet via UPF, NAT for outbound, FORWARD rules
 
@@ -192,7 +192,7 @@ setup_dataplane() {
     # Clean up any existing rules first
     cleanup_dataplane 2>/dev/null
 
-    # Route UE subnet (10.10.168.0/24) to UPF container
+    # Route UE subnet (10.206.0.0/16) to UPF container
     ip route add "$UE_SUBNET" via "$UPF_IP" dev br-free5gc 2>/dev/null || \
         log "  Route ${UE_SUBNET} already exists"
     log "  Route: ${UE_SUBNET} via ${UPF_IP}"
