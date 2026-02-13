@@ -437,9 +437,9 @@ cmd_start() {
     docker restart ueransim >/dev/null 2>&1
     sleep 5
 
-    # Launch UE and setup data plane
-    log "Step 4/5: Launching UE and setting up data plane..."
-    cmd_ue start || log "WARNING: UE launch failed. Try manually: ./free5gc.sh ue start"
+    # Setup data plane routing (host -> UPF -> internet for real UE traffic)
+    log "Step 4/5: Setting up data plane routing..."
+    setup_dataplane
 
     # Show status
     log "Step 5/5: Deployment status"
