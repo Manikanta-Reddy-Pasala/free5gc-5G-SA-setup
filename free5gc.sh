@@ -46,6 +46,7 @@ SST=3
 SD="198153"
 DNN="internet"
 UE_SUBNET="10.206.0.0/16"
+GTPU_PORT="2152"
 WEBUI_PORT=4000
 
 # Colors
@@ -214,6 +215,13 @@ setup_dataplane() {
     iptables -I FORWARD 1 -d "$UE_SUBNET" -j ACCEPT
     log "  FORWARD: ACCEPT for ${UE_SUBNET}"
 
+    # GTP-U: DNAT host:2152 -> UPF container (for real gNB traffic)
+    iptables -t nat -A PREROUTING -p udp --dport "$GTPU_PORT" -j DNAT --to-destination "${UPF_IP}:${GTPU_PORT}"
+    iptables -t nat -A OUTPUT -p udp --dport "$GTPU_PORT" -j DNAT --to-destination "${UPF_IP}:${GTPU_PORT}"
+    iptables -I FORWARD 1 -p udp -d "$UPF_IP" --dport "$GTPU_PORT" -j ACCEPT
+    iptables -I FORWARD 1 -p udp -s "$UPF_IP" --sport "$GTPU_PORT" -j ACCEPT
+    log "  GTP-U: DNAT host:${GTPU_PORT} -> ${UPF_IP}:${GTPU_PORT}"
+
     log "Data plane routing configured."
 }
 
@@ -222,6 +230,13 @@ cleanup_dataplane() {
     iptables -t nat -D POSTROUTING -s "$UE_SUBNET" ! -o br-free5gc -j MASQUERADE 2>/dev/null || true
     iptables -D FORWARD -s "$UE_SUBNET" -j ACCEPT 2>/dev/null || true
     iptables -D FORWARD -d "$UE_SUBNET" -j ACCEPT 2>/dev/null || true
+    # GTP-U cleanup (try all possible UPF IPs)
+    for upf_ip in $(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' upf 2>/dev/null) 10.100.200.3 10.100.200.4 10.100.200.5; do
+        iptables -t nat -D PREROUTING -p udp --dport "$GTPU_PORT" -j DNAT --to-destination "${upf_ip}:${GTPU_PORT}" 2>/dev/null || true
+        iptables -t nat -D OUTPUT -p udp --dport "$GTPU_PORT" -j DNAT --to-destination "${upf_ip}:${GTPU_PORT}" 2>/dev/null || true
+        iptables -D FORWARD -p udp -d "$upf_ip" --dport "$GTPU_PORT" -j ACCEPT 2>/dev/null || true
+        iptables -D FORWARD -p udp -s "$upf_ip" --sport "$GTPU_PORT" -j ACCEPT 2>/dev/null || true
+    done
 }
 
 cmd_ue() {
