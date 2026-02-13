@@ -13,6 +13,9 @@
 #   ./free5gc.sh capture start [name] # Start pcap capture (bridge + SBI)
 #   ./free5gc.sh capture stop         # Stop capture and save pcap
 #   ./free5gc.sh provision            # Provision subscriber in MongoDB
+#   ./free5gc.sh ue start               # Launch UE + setup data plane
+#   ./free5gc.sh ue stop                # Stop UE + cleanup routes
+#   ./free5gc.sh ue status              # Check UE connectivity
 #   ./free5gc.sh stop                 # Stop and remove all containers
 #   ./free5gc.sh status               # Show container status
 #   ./free5gc.sh logs [nf]            # Tail logs (all or specific NF)
@@ -42,6 +45,8 @@ AMF_FIELD="8000"
 SST=3
 SD="198153"
 DNN="internet"
+UE_SUBNET="10.60.0.0/16"
+UPF_IP="10.100.200.4"
 WEBUI_PORT=4000
 
 # Colors
@@ -174,6 +179,114 @@ cmd_build() {
     log ""
     log "Next: ./free5gc.sh start"
     log ""
+}
+
+setup_dataplane() {
+    # Setup host-side routing and NAT so UE traffic can reach the internet
+    # UPF assigns UEs IPs from 10.60.0.0/16. Traffic flows:
+    #   UE -> gNB -> GTP-U tunnel -> UPF (decap) -> host -> internet
+    # Host needs: route to UE subnet via UPF, NAT for outbound, FORWARD rules
+
+    log "Setting up data plane routing..."
+
+    # Clean up any existing rules first
+    cleanup_dataplane 2>/dev/null
+
+    # Route UE subnet (10.60.0.0/16) to UPF container
+    ip route add "$UE_SUBNET" via "$UPF_IP" dev br-free5gc 2>/dev/null || \
+        log "  Route ${UE_SUBNET} already exists"
+    log "  Route: ${UE_SUBNET} via ${UPF_IP}"
+
+    # NAT: masquerade UE traffic going to the internet
+    iptables -t nat -A POSTROUTING -s "$UE_SUBNET" ! -o br-free5gc -j MASQUERADE
+    log "  NAT: MASQUERADE for ${UE_SUBNET}"
+
+    # FORWARD: allow UE traffic through the host
+    iptables -I FORWARD 1 -s "$UE_SUBNET" -j ACCEPT
+    iptables -I FORWARD 1 -d "$UE_SUBNET" -j ACCEPT
+    log "  FORWARD: ACCEPT for ${UE_SUBNET}"
+
+    log "Data plane routing configured."
+}
+
+cleanup_dataplane() {
+    ip route del "$UE_SUBNET" via "$UPF_IP" dev br-free5gc 2>/dev/null || true
+    iptables -t nat -D POSTROUTING -s "$UE_SUBNET" ! -o br-free5gc -j MASQUERADE 2>/dev/null || true
+    iptables -D FORWARD -s "$UE_SUBNET" -j ACCEPT 2>/dev/null || true
+    iptables -D FORWARD -d "$UE_SUBNET" -j ACCEPT 2>/dev/null || true
+}
+
+cmd_ue() {
+    local subcmd="${1:-start}"
+
+    case "$subcmd" in
+        start)
+            # Launch UE and establish PDU session
+            log "Launching UE (${IMSI})..."
+
+            # Kill any existing UE process
+            docker exec ueransim pkill -f nr-ue 2>/dev/null || true
+            sleep 1
+
+            # Start UE in background
+            docker exec -d ueransim ./nr-ue -c ./config/uecfg.yaml
+            sleep 5
+
+            # Check if uesimtun0 was created (PDU session established)
+            if docker exec ueransim ip addr show uesimtun0 >/dev/null 2>&1; then
+                local ue_ip
+                ue_ip=$(docker exec ueransim ip addr show uesimtun0 2>/dev/null | grep 'inet ' | awk '{print $2}')
+                log "UE connected! IP: ${ue_ip}"
+
+                # Setup host routing for data plane
+                setup_dataplane
+
+                # Test connectivity from UE
+                log "Testing UE internet connectivity..."
+                local ping_result
+                ping_result=$(docker exec ueransim ping -c 3 -W 2 -I uesimtun0 8.8.8.8 2>&1)
+                if echo "$ping_result" | grep -q "bytes from"; then
+                    log "  Ping 8.8.8.8 via uesimtun0: ${GREEN}OK${NC}"
+                else
+                    log "  Ping 8.8.8.8 via uesimtun0: ${YELLOW}FAILED${NC}"
+                    log "  (UPF may need a moment to set up GTP tunnel)"
+                fi
+            else
+                log "${RED}ERROR: uesimtun0 not created. PDU session failed.${NC}"
+                log "Check AMF/SMF logs: ./free5gc.sh logs amf"
+                docker exec ueransim cat /tmp/nr-ue.log 2>/dev/null || \
+                    docker logs ueransim --tail 20 2>&1
+                return 1
+            fi
+            ;;
+
+        stop)
+            log "Stopping UE..."
+            docker exec ueransim pkill -f nr-ue 2>/dev/null || true
+            cleanup_dataplane
+            log "UE stopped and data plane routes cleaned up."
+            ;;
+
+        status)
+            if docker exec ueransim ip addr show uesimtun0 >/dev/null 2>&1; then
+                local ue_ip
+                ue_ip=$(docker exec ueransim ip addr show uesimtun0 2>/dev/null | grep 'inet ' | awk '{print $2}')
+                echo -e "${GREEN}UE is connected${NC}"
+                echo "  IP: ${ue_ip}"
+                echo "  Tunnel: uesimtun0"
+                echo ""
+                echo "Testing connectivity..."
+                docker exec ueransim ping -c 2 -W 2 -I uesimtun0 8.8.8.8 2>&1 | tail -3
+            else
+                echo -e "${RED}UE is not connected${NC}"
+                echo "  Start with: ./free5gc.sh ue start"
+            fi
+            ;;
+
+        *)
+            echo "Usage: ./free5gc.sh ue <start|stop|status>"
+            ;;
+    esac
 }
 
 cmd_provision() {
@@ -449,6 +562,8 @@ cmd_capture() {
 }
 
 cmd_stop() {
+    log "Cleaning up data plane routes..."
+    cleanup_dataplane
     log "Cleaning up SCTP forwarding rules..."
     cleanup_sctp_forward
     log "Stopping all containers..."
@@ -497,6 +612,9 @@ show_usage() {
     echo "  capture start [name]  Start pcap capture (bridge + SBI)"
     echo "  capture stop          Stop capture, merge and save pcap"
     echo "  provision             Provision subscriber (IMSI/PLMN) in MongoDB"
+    echo "  ue start              Launch UE, establish PDU session, setup data plane"
+    echo "  ue stop               Stop UE and cleanup data plane routes"
+    echo "  ue status             Check UE connection and test ping"
     echo "  stop                  Stop and remove all containers"
     echo "  status                Show container status"
     echo "  logs [nf]             Tail logs (all or specific: amf, smf, etc.)"
@@ -518,6 +636,7 @@ case "${1:-}" in
     start)  cmd_start "${2:-}" ;;
     capture) shift; cmd_capture "$@" ;;
     provision) cmd_provision ;;
+    ue) shift; cmd_ue "$@" ;;
     stop)   cmd_stop ;;
     status) cmd_status ;;
     logs)   cmd_logs "${2:-}" ;;
