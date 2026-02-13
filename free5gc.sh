@@ -414,11 +414,11 @@ cmd_start() {
     fi
 
     # Start all containers (CP + UPF + UERANSIM)
-    log "Step 1/4: Starting containers..."
+    log "Step 1/5: Starting containers..."
     docker compose -f "$COMPOSE_FILE" up -d
 
     # Wait for CP health
-    log "Step 2/4: Waiting for Control Plane to be healthy..."
+    log "Step 2/5: Waiting for Control Plane to be healthy..."
     wait_healthy "free5gc-cp" 120 || {
         log "Container logs:"
         docker logs free5gc-cp --tail 20 2>&1 | head -20
@@ -429,7 +429,7 @@ cmd_start() {
     setup_sctp_forward
 
     # Provision default subscriber
-    log "Step 3/4: Provisioning default subscriber..."
+    log "Step 3/5: Provisioning default subscriber..."
     cmd_provision || log "WARNING: Subscriber provisioning failed. May need manual setup."
 
     # Restart UERANSIM to ensure gNB connects after AMF NGAP is ready
@@ -437,8 +437,12 @@ cmd_start() {
     docker restart ueransim >/dev/null 2>&1
     sleep 5
 
+    # Launch UE and setup data plane
+    log "Step 4/5: Launching UE and setting up data plane..."
+    cmd_ue start || log "WARNING: UE launch failed. Try manually: ./free5gc.sh ue start"
+
     # Show status
-    log "Step 4/4: Deployment status"
+    log "Step 5/5: Deployment status"
     echo ""
     docker compose -f "$COMPOSE_FILE" ps
     echo ""
