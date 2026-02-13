@@ -81,6 +81,7 @@ services:
   free5gc-upf:
     container_name: upf
     image: free5gc-upf-local:v4.2.0
+    command: bash -c "./upf-iptables.sh && ./upf -c ./config/upfcfg.yaml 2>&1 | tee /var/log/free5gc/upf.log"
     build:
       context: .
       dockerfile: Dockerfile.upf-local
