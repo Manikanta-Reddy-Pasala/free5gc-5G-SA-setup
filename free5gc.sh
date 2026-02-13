@@ -46,7 +46,6 @@ SST=3
 SD="198153"
 DNN="internet"
 UE_SUBNET="10.206.0.0/16"
-UPF_IP="10.100.200.4"
 WEBUI_PORT=4000
 
 # Colors
@@ -189,10 +188,19 @@ setup_dataplane() {
 
     log "Setting up data plane routing..."
 
+    # Detect UPF container IP dynamically
+    local UPF_IP
+    UPF_IP=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' upf 2>/dev/null)
+    if [ -z "$UPF_IP" ]; then
+        log "ERROR: Cannot detect UPF container IP. Is UPF running?"
+        return 1
+    fi
+    log "  UPF container IP: ${UPF_IP}"
+
     # Clean up any existing rules first
     cleanup_dataplane 2>/dev/null
 
-    # Route UE subnet (10.206.0.0/16) to UPF container
+    # Route UE subnet to UPF container
     ip route add "$UE_SUBNET" via "$UPF_IP" dev br-free5gc 2>/dev/null || \
         log "  Route ${UE_SUBNET} already exists"
     log "  Route: ${UE_SUBNET} via ${UPF_IP}"
@@ -210,7 +218,7 @@ setup_dataplane() {
 }
 
 cleanup_dataplane() {
-    ip route del "$UE_SUBNET" via "$UPF_IP" dev br-free5gc 2>/dev/null || true
+    ip route del "$UE_SUBNET" dev br-free5gc 2>/dev/null || true
     iptables -t nat -D POSTROUTING -s "$UE_SUBNET" ! -o br-free5gc -j MASQUERADE 2>/dev/null || true
     iptables -D FORWARD -s "$UE_SUBNET" -j ACCEPT 2>/dev/null || true
     iptables -D FORWARD -d "$UE_SUBNET" -j ACCEPT 2>/dev/null || true
