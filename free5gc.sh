@@ -176,6 +176,113 @@ cmd_build() {
     log ""
 }
 
+cmd_provision() {
+    log "Provisioning subscriber ${IMSI}..."
+
+    # Login to WebUI to get JWT token
+    log "Logging in to WebUI (port ${WEBUI_PORT})..."
+    local token
+    token=$(curl -s -X POST "http://localhost:${WEBUI_PORT}/api/login" \
+        -H 'Content-Type: application/json' \
+        -d '{"username":"admin","password":"free5gc"}' | \
+        python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])" 2>/dev/null)
+
+    if [ -z "$token" ] || [ "$token" = "None" ]; then
+        log "ERROR: Failed to get JWT token from WebUI"
+        return 1
+    fi
+    log "  JWT token obtained"
+
+    # Create subscriber via WebUI API
+    log "Creating subscriber ${IMSI} (PLMN: ${PLMN})..."
+    local http_code
+    http_code=$(curl -s -o /dev/null -w "%{http_code}" \
+        -X POST "http://localhost:${WEBUI_PORT}/api/subscriber/${IMSI}/${PLMN}" \
+        -H 'Content-Type: application/json' \
+        -H "Token: ${token}" \
+        -d "{
+  \"plmnID\": \"${PLMN}\",
+  \"ueId\": \"${IMSI}\",
+  \"AuthenticationSubscription\": {
+    \"authenticationMethod\": \"5G_AKA\",
+    \"permanentKey\": {\"permanentKeyValue\": \"${K}\", \"encryptionKey\": 0, \"encryptionAlgorithm\": 0},
+    \"sequenceNumber\": \"${SQN}\",
+    \"authenticationManagementField\": \"${AMF_FIELD}\",
+    \"milenage\": {\"op\": {\"opValue\": \"\", \"encryptionKey\": 0, \"encryptionAlgorithm\": 0}},
+    \"opc\": {\"opcValue\": \"${OPC}\", \"encryptionKey\": 0, \"encryptionAlgorithm\": 0}
+  },
+  \"AccessAndMobilitySubscriptionData\": {
+    \"gpsis\": [\"msisdn-0900000000\"],
+    \"subscribedUeAmbr\": {\"downlink\": \"2 Gbps\", \"uplink\": \"1 Gbps\"},
+    \"nssai\": {
+      \"defaultSingleNssais\": [{\"sst\": ${SST}, \"sd\": \"${SD}\"}],
+      \"singleNssais\": [{\"sst\": ${SST}, \"sd\": \"${SD}\"}]
+    }
+  },
+  \"SessionManagementSubscriptionData\": [{
+    \"singleNssai\": {\"sst\": ${SST}, \"sd\": \"${SD}\"},
+    \"dnnConfigurations\": {
+      \"${DNN}\": {
+        \"pduSessionTypes\": {\"defaultSessionType\": \"IPV4\", \"allowedSessionTypes\": [\"IPV4\"]},
+        \"sscModes\": {\"defaultSscMode\": \"SSC_MODE_1\"},
+        \"5gQosProfile\": {\"5qi\": 9, \"arp\": {\"priorityLevel\": 8, \"preemptCap\": \"\", \"preemptVuln\": \"\"}, \"priorityLevel\": 8},
+        \"sessionAmbr\": {\"downlink\": \"1000 Mbps\", \"uplink\": \"1000 Mbps\"}
+      }
+    }
+  }],
+  \"SmfSelectionSubscriptionData\": {
+    \"subscribedSnssaiInfos\": {
+      \"0${SST}${SD}\": {\"dnnInfos\": [{\"dnn\": \"${DNN}\"}]}
+    }
+  },
+  \"AmPolicyData\": {\"subscCats\": [\"free5gc\"]},
+  \"SmPolicyData\": {
+    \"smPolicySnssaiData\": {
+      \"0${SST}${SD}\": {
+        \"snssai\": {\"sst\": ${SST}, \"sd\": \"${SD}\"},
+        \"smPolicyDnnData\": {\"${DNN}\": {\"dnn\": \"${DNN}\"}}
+      }
+    }
+  }
+}")
+
+    if [ "$http_code" = "201" ] || [ "$http_code" = "200" ]; then
+        log "  Subscriber created (HTTP $http_code)"
+    elif [ "$http_code" = "409" ]; then
+        log "  Subscriber already exists (HTTP 409)"
+    else
+        log "WARNING: Unexpected response (HTTP $http_code)"
+    fi
+
+    # Patch MongoDB: add allowedSessionTypes
+    log "Patching MongoDB: adding allowedSessionTypes..."
+    docker exec mongodb mongo mongodb://localhost:27017/free5gc --quiet --eval "
+db['subscriptionData.provisionedData.smData'].updateMany(
+  { ueId: '${IMSI}' },
+  { \$set: { 'dnnConfigurations.internet.pduSessionTypes.allowedSessionTypes': ['IPV4'] } }
+)" 2>&1 | grep -v "^$"
+
+    # Patch MongoDB: populate smPolicySnssaiData
+    log "Patching MongoDB: populating smPolicySnssaiData..."
+    docker exec mongodb mongo mongodb://localhost:27017/free5gc --quiet --eval "
+db['policyData.ues.smData'].updateOne(
+  { ueId: '${IMSI}' },
+  {
+    \$set: {
+      smPolicySnssaiData: {
+        '0${SST}${SD}': {
+          snssai: { sst: ${SST}, sd: '${SD}' },
+          smPolicyDnnData: { '${DNN}': { dnn: '${DNN}' } }
+        }
+      }
+    }
+  },
+  { upsert: true }
+)" 2>&1 | grep -v "^$"
+
+    log "Subscriber ${IMSI} provisioned."
+}
+
 cmd_start() {
     local debug=false
     if [ "${1:-}" = "--debug" ]; then
@@ -339,113 +446,6 @@ cmd_capture() {
             echo "Usage: ./free5gc.sh capture <start|stop> [name]"
             ;;
     esac
-}
-
-cmd_provision() {
-    log "Provisioning subscriber ${IMSI}..."
-
-    # Login to WebUI to get JWT token
-    log "Logging in to WebUI (port ${WEBUI_PORT})..."
-    local token
-    token=$(curl -s -X POST "http://localhost:${WEBUI_PORT}/api/login" \
-        -H 'Content-Type: application/json' \
-        -d '{"username":"admin","password":"free5gc"}' | \
-        python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])" 2>/dev/null)
-
-    if [ -z "$token" ] || [ "$token" = "None" ]; then
-        log "ERROR: Failed to get JWT token from WebUI"
-        return 1
-    fi
-    log "  JWT token obtained"
-
-    # Create subscriber via WebUI API
-    log "Creating subscriber ${IMSI} (PLMN: ${PLMN})..."
-    local http_code
-    http_code=$(curl -s -o /dev/null -w "%{http_code}" \
-        -X POST "http://localhost:${WEBUI_PORT}/api/subscriber/${IMSI}/${PLMN}" \
-        -H 'Content-Type: application/json' \
-        -H "Token: ${token}" \
-        -d "{
-  \"plmnID\": \"${PLMN}\",
-  \"ueId\": \"${IMSI}\",
-  \"AuthenticationSubscription\": {
-    \"authenticationMethod\": \"5G_AKA\",
-    \"permanentKey\": {\"permanentKeyValue\": \"${K}\", \"encryptionKey\": 0, \"encryptionAlgorithm\": 0},
-    \"sequenceNumber\": \"${SQN}\",
-    \"authenticationManagementField\": \"${AMF_FIELD}\",
-    \"milenage\": {\"op\": {\"opValue\": \"\", \"encryptionKey\": 0, \"encryptionAlgorithm\": 0}},
-    \"opc\": {\"opcValue\": \"${OPC}\", \"encryptionKey\": 0, \"encryptionAlgorithm\": 0}
-  },
-  \"AccessAndMobilitySubscriptionData\": {
-    \"gpsis\": [\"msisdn-0900000000\"],
-    \"subscribedUeAmbr\": {\"downlink\": \"2 Gbps\", \"uplink\": \"1 Gbps\"},
-    \"nssai\": {
-      \"defaultSingleNssais\": [{\"sst\": ${SST}, \"sd\": \"${SD}\"}],
-      \"singleNssais\": [{\"sst\": ${SST}, \"sd\": \"${SD}\"}]
-    }
-  },
-  \"SessionManagementSubscriptionData\": [{
-    \"singleNssai\": {\"sst\": ${SST}, \"sd\": \"${SD}\"},
-    \"dnnConfigurations\": {
-      \"${DNN}\": {
-        \"pduSessionTypes\": {\"defaultSessionType\": \"IPV4\", \"allowedSessionTypes\": [\"IPV4\"]},
-        \"sscModes\": {\"defaultSscMode\": \"SSC_MODE_1\"},
-        \"5gQosProfile\": {\"5qi\": 9, \"arp\": {\"priorityLevel\": 8, \"preemptCap\": \"\", \"preemptVuln\": \"\"}, \"priorityLevel\": 8},
-        \"sessionAmbr\": {\"downlink\": \"1000 Mbps\", \"uplink\": \"1000 Mbps\"}
-      }
-    }
-  }],
-  \"SmfSelectionSubscriptionData\": {
-    \"subscribedSnssaiInfos\": {
-      \"0${SST}${SD}\": {\"dnnInfos\": [{\"dnn\": \"${DNN}\"}]}
-    }
-  },
-  \"AmPolicyData\": {\"subscCats\": [\"free5gc\"]},
-  \"SmPolicyData\": {
-    \"smPolicySnssaiData\": {
-      \"0${SST}${SD}\": {
-        \"snssai\": {\"sst\": ${SST}, \"sd\": \"${SD}\"},
-        \"smPolicyDnnData\": {\"${DNN}\": {\"dnn\": \"${DNN}\"}}
-      }
-    }
-  }
-}")
-
-    if [ "$http_code" = "201" ] || [ "$http_code" = "200" ]; then
-        log "  Subscriber created (HTTP $http_code)"
-    elif [ "$http_code" = "409" ]; then
-        log "  Subscriber already exists (HTTP 409)"
-    else
-        log "WARNING: Unexpected response (HTTP $http_code)"
-    fi
-
-    # Patch MongoDB: add allowedSessionTypes
-    log "Patching MongoDB: adding allowedSessionTypes..."
-    docker exec mongodb mongo mongodb://localhost:27017/free5gc --quiet --eval "
-db['subscriptionData.provisionedData.smData'].updateMany(
-  { ueId: '${IMSI}' },
-  { \$set: { 'dnnConfigurations.internet.pduSessionTypes.allowedSessionTypes': ['IPV4'] } }
-)" 2>&1 | grep -v "^$"
-
-    # Patch MongoDB: populate smPolicySnssaiData
-    log "Patching MongoDB: populating smPolicySnssaiData..."
-    docker exec mongodb mongo mongodb://localhost:27017/free5gc --quiet --eval "
-db['policyData.ues.smData'].updateOne(
-  { ueId: '${IMSI}' },
-  {
-    \$set: {
-      smPolicySnssaiData: {
-        '0${SST}${SD}': {
-          snssai: { sst: ${SST}, sd: '${SD}' },
-          smPolicyDnnData: { '${DNN}': { dnn: '${DNN}' } }
-        }
-      }
-    }
-  },
-  { upsert: true }
-)" 2>&1 | grep -v "^$"
-
-    log "Subscriber ${IMSI} provisioned."
 }
 
 cmd_stop() {
