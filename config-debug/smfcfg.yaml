@@ -48,9 +48,9 @@ configuration:
             dnnUpfInfoList:
               - dnn: internet
                 pools:
-                  - cidr: 10.60.0.0/16
+                  - cidr: 10.206.0.0/16
                 staticPools:
-                  - cidr: 10.60.100.0/24
+                  - cidr: 10.206.0.0/16
         interfaces:
           - interfaceType: N3
             endpoints:
