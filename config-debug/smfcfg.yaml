@@ -50,7 +50,7 @@ configuration:
                 pools:
                   - cidr: 10.206.0.0/16
                 staticPools:
-                  - cidr: 10.206.0.0/16
+                  - cidr: 10.206.100.0/24
         interfaces:
           - interfaceType: N3
             endpoints:

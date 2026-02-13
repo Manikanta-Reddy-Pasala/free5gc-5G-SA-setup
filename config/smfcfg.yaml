@@ -59,7 +59,7 @@ configuration:
                 pools:
                   - cidr: 10.206.0.0/16
                 staticPools:
-                  - cidr: 10.206.0.0/16
+                  - cidr: 10.206.100.0/24
           - sNssai: # S-NSSAI (Single Network Slice Selection Assistance Information)
               sst: 3 # Slice/Service Type (uinteger, range: 0~255)
               sd: 198153 # Slice Differentiator (3 bytes hex string, range: 000000~FFFFFF)
