@@ -599,7 +599,197 @@ cmd_stop() {
 }
 
 cmd_status() {
-    docker compose -f "$COMPOSE_FILE" ps
+    echo ""
+    echo -e "${BOLD}╔══════════════════════════════════════════════════════════╗${NC}"
+    echo -e "${BOLD}║              free5GC Status & Validation                ║${NC}"
+    echo -e "${BOLD}╚══════════════════════════════════════════════════════════╝${NC}"
+    echo ""
+
+    local all_ok=true
+
+    # ── 1. Containers ──────────────────────────────────────
+    echo -e "${CYAN}── Containers ──────────────────────────────────────────${NC}"
+    local containers=("mongodb" "free5gc-cp" "upf" "webui" "ueransim")
+    for c in "${containers[@]}"; do
+        local state
+        state=$(docker inspect --format='{{.State.Status}}' "$c" 2>/dev/null || echo "missing")
+        local health=""
+        if [ "$c" = "free5gc-cp" ]; then
+            health=$(docker inspect --format='{{.State.Health.Status}}' "$c" 2>/dev/null || echo "")
+            [ -n "$health" ] && health=" ($health)"
+        fi
+        if [ "$state" = "running" ]; then
+            printf "  %-15s ${GREEN}%-10s${NC}%s\n" "$c" "running" "$health"
+        else
+            printf "  %-15s ${RED}%-10s${NC}\n" "$c" "$state"
+            all_ok=false
+        fi
+    done
+    echo ""
+
+    # ── 2. Control Plane (NGAP/SCTP) ──────────────────────
+    echo -e "${CYAN}── Control Plane (NGAP) ────────────────────────────────${NC}"
+    # SCTP DNAT
+    if iptables -t nat -C PREROUTING -p sctp --dport "$NGAP_PORT" -j DNAT --to-destination "${AMF_IP}:${NGAP_PORT}" >/dev/null 2>&1; then
+        echo -e "  SCTP DNAT :${NGAP_PORT}     ${GREEN}OK${NC}  -> ${AMF_IP}:${NGAP_PORT}"
+    else
+        echo -e "  SCTP DNAT :${NGAP_PORT}     ${RED}MISSING${NC}"
+        all_ok=false
+    fi
+    # AMF listening
+    if docker exec free5gc-cp ss -Slnp 2>/dev/null | grep -q "$NGAP_PORT"; then
+        echo -e "  AMF SCTP listener    ${GREEN}OK${NC}  :${NGAP_PORT}"
+    else
+        echo -e "  AMF SCTP listener    ${RED}NOT LISTENING${NC}"
+        all_ok=false
+    fi
+    echo ""
+
+    # ── 3. Data Plane (GTP-U) ─────────────────────────────
+    echo -e "${CYAN}── Data Plane (GTP-U) ──────────────────────────────────${NC}"
+    local UPF_CUR_IP
+    UPF_CUR_IP=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' upf 2>/dev/null)
+    # GTP-U DNAT
+    if iptables -t nat -C PREROUTING -p udp --dport "$GTPU_PORT" -j DNAT --to-destination "${UPF_CUR_IP}:${GTPU_PORT}" >/dev/null 2>&1; then
+        echo -e "  GTP-U DNAT :${GTPU_PORT}    ${GREEN}OK${NC}  -> ${UPF_CUR_IP}:${GTPU_PORT}"
+    else
+        echo -e "  GTP-U DNAT :${GTPU_PORT}    ${RED}MISSING${NC}"
+        all_ok=false
+    fi
+    # UPF listening
+    if docker exec upf ss -ulnp 2>/dev/null | grep -q "$GTPU_PORT"; then
+        echo -e "  UPF GTP-U listener   ${GREEN}OK${NC}  :${GTPU_PORT}"
+    else
+        echo -e "  UPF GTP-U listener   ${RED}NOT LISTENING${NC}"
+        all_ok=false
+    fi
+    # UPF pool
+    local upf_pool
+    upf_pool=$(docker exec upf ip route show 2>/dev/null | grep upfgtp | awk '{print $1}')
+    if [ "$upf_pool" = "$UE_SUBNET" ]; then
+        echo -e "  UPF IP pool          ${GREEN}OK${NC}  ${upf_pool} on upfgtp"
+    else
+        echo -e "  UPF IP pool          ${RED}WRONG${NC}  got: ${upf_pool:-none}, expected: ${UE_SUBNET}"
+        all_ok=false
+    fi
+    # PFCP association
+    if grep -q "New node\|handleAssociationSetupRequest" "$SCRIPT_DIR/logs/upf/upf.log" 2>/dev/null; then
+        echo -e "  PFCP association     ${GREEN}OK${NC}  SMF <-> UPF"
+    else
+        echo -e "  PFCP association     ${RED}NOT FOUND${NC}"
+        all_ok=false
+    fi
+    echo ""
+
+    # ── 4. Host Routing & NAT ─────────────────────────────
+    echo -e "${CYAN}── Host Routing & NAT ──────────────────────────────────${NC}"
+    # Route
+    if ip route show | grep -q "$UE_SUBNET"; then
+        local via
+        via=$(ip route show | grep "$UE_SUBNET" | awk '{print $3}')
+        echo -e "  Route ${UE_SUBNET}  ${GREEN}OK${NC}  via ${via}"
+    else
+        echo -e "  Route ${UE_SUBNET}  ${RED}MISSING${NC}"
+        all_ok=false
+    fi
+    # NAT
+    if iptables -t nat -C POSTROUTING -s "$UE_SUBNET" ! -o br-free5gc -j MASQUERADE >/dev/null 2>&1; then
+        echo -e "  NAT MASQUERADE       ${GREEN}OK${NC}  for ${UE_SUBNET}"
+    else
+        echo -e "  NAT MASQUERADE       ${RED}MISSING${NC}"
+        all_ok=false
+    fi
+    # FORWARD
+    if iptables -C FORWARD -s "$UE_SUBNET" -j ACCEPT >/dev/null 2>&1 && iptables -C FORWARD -d "$UE_SUBNET" -j ACCEPT >/dev/null 2>&1; then
+        echo -e "  FORWARD rules        ${GREEN}OK${NC}  ACCEPT ${UE_SUBNET}"
+    else
+        echo -e "  FORWARD rules        ${RED}MISSING${NC}"
+        all_ok=false
+    fi
+    # ip_forward
+    local fwd
+    fwd=$(sysctl -n net.ipv4.ip_forward 2>/dev/null)
+    if [ "$fwd" = "1" ]; then
+        echo -e "  IP forwarding        ${GREEN}OK${NC}  enabled"
+    else
+        echo -e "  IP forwarding        ${RED}DISABLED${NC}"
+        all_ok=false
+    fi
+    echo ""
+
+    # ── 5. Subscriber ─────────────────────────────────────
+    echo -e "${CYAN}── Subscriber ──────────────────────────────────────────${NC}"
+    local auth_count
+    auth_count=$(docker exec mongodb mongo mongodb://localhost:27017/free5gc --quiet --eval "db['subscriptionData.authenticationData.authenticationSubscription'].count({ueId: '${IMSI}'})" 2>/dev/null)
+    local am_count
+    am_count=$(docker exec mongodb mongo mongodb://localhost:27017/free5gc --quiet --eval "db['subscriptionData.provisionedData.amData'].count({ueId: '${IMSI}'})" 2>/dev/null)
+    local sm_count
+    sm_count=$(docker exec mongodb mongo mongodb://localhost:27017/free5gc --quiet --eval "db['subscriptionData.provisionedData.smData'].count({ueId: '${IMSI}'})" 2>/dev/null)
+
+    echo -e "  IMSI: ${IMSI}"
+    echo -e "  PLMN: ${PLMN} (MCC:${MCC} MNC:${MNC})"
+    echo -e "  NSSAI: SST:${SST} SD:${SD}  DNN:${DNN}"
+    if [ "${auth_count:-0}" -ge 1 ] && [ "${am_count:-0}" -ge 1 ] && [ "${sm_count:-0}" -ge 1 ]; then
+        echo -e "  MongoDB records      ${GREEN}OK${NC}  auth:${auth_count} am:${am_count} sm:${sm_count}"
+    else
+        echo -e "  MongoDB records      ${RED}INCOMPLETE${NC}  auth:${auth_count:-0} am:${am_count:-0} sm:${sm_count:-0}"
+        echo -e "  Run: ${YELLOW}./free5gc.sh provision${NC}"
+        all_ok=false
+    fi
+    echo ""
+
+    # ── 6. NF Health (CP logs) ────────────────────────────
+    echo -e "${CYAN}── NF Registration (NRF) ───────────────────────────────${NC}"
+    local nfs=("NRF" "AMF" "AUSF" "UDM" "UDR" "SMF" "NSSF" "PCF")
+    for nf in "${nfs[@]}"; do
+        local nf_lower
+        nf_lower=$(echo "$nf" | tr '[:upper:]' '[:lower:]')
+        if [ -f "$SCRIPT_DIR/logs/cp/${nf_lower}.log" ]; then
+            if grep -q "REGISTERED\|server started\|OAuth2 setting receive" "$SCRIPT_DIR/logs/cp/${nf_lower}.log" 2>/dev/null; then
+                printf "  %-10s ${GREEN}OK${NC}\n" "$nf"
+            else
+                printf "  %-10s ${YELLOW}STARTING${NC}\n" "$nf"
+            fi
+        else
+            printf "  %-10s ${RED}NO LOG${NC}\n" "$nf"
+            all_ok=false
+        fi
+    done
+    echo ""
+
+    # ── 7. Connectivity Test ──────────────────────────────
+    echo -e "${CYAN}── Connectivity ────────────────────────────────────────${NC}"
+    local host_ip
+    host_ip=$(hostname -I | awk '{print $1}')
+    echo -e "  Host IP: ${host_ip}"
+    echo -e "  WebUI:   http://${host_ip}:${WEBUI_PORT}"
+    # Check if UERANSIM UE is connected
+    if docker exec ueransim ip addr show uesimtun0 >/dev/null 2>&1; then
+        local ue_ip
+        ue_ip=$(docker exec ueransim ip addr show uesimtun0 2>/dev/null | grep 'inet ' | awk '{print $2}')
+        echo -e "  UERANSIM UE:         ${GREEN}CONNECTED${NC}  IP: ${ue_ip}"
+        # Quick ping test
+        if docker exec ueransim ping -c 1 -W 2 -I uesimtun0 8.8.8.8 >/dev/null 2>&1; then
+            echo -e "  UE -> Internet:      ${GREEN}OK${NC}  (ping 8.8.8.8)"
+        else
+            echo -e "  UE -> Internet:      ${RED}FAIL${NC}  (ping 8.8.8.8)"
+            all_ok=false
+        fi
+    else
+        echo -e "  UERANSIM UE:         ${YELLOW}NOT CONNECTED${NC}"
+        echo -e "  (real gNB may connect separately)"
+    fi
+    echo ""
+
+    # ── Summary ───────────────────────────────────────────
+    echo -e "${BOLD}════════════════════════════════════════════════════════${NC}"
+    if [ "$all_ok" = true ]; then
+        echo -e "  ${GREEN}${BOLD}ALL CHECKS PASSED${NC}"
+    else
+        echo -e "  ${YELLOW}${BOLD}SOME CHECKS FAILED${NC} — review above"
+    fi
+    echo -e "${BOLD}════════════════════════════════════════════════════════${NC}"
+    echo ""
 }
 
 cmd_logs() {
