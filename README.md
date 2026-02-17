@@ -29,7 +29,8 @@ Only needs Docker - no Go, GCC, or CMake on host. Works on Mac (Apple Silicon/In
 git clone https://github.com/Manikanta-Reddy-Pasala/free5gc-5G-SA-setup.git
 cd free5gc-5G-SA-setup
 ./free5gc.sh build            # Compile all NFs from source (~15 min first time)
-./free5gc.sh start            # Start all containers (info-level logging)
+./free5gc.sh start            # Start with defaults (MCC=001, MNC=01, TAC=1)
+./free5gc.sh start --mcc 404 --mnc 30 --tac 1   # Start with custom PLMN
 ```
 
 After starting, provision your subscriber via the **WebUI**:
@@ -41,7 +42,8 @@ After starting, provision your subscriber via the **WebUI**:
 ```bash
 ./free5gc.sh build                # Compile all NFs from source (~15 min)
 ./free5gc.sh build --quick        # Rebuild runtime images only (skip source compile)
-./free5gc.sh start                # Start all containers (normal mode)
+./free5gc.sh start                # Start with defaults (MCC=001, MNC=01, TAC=1)
+./free5gc.sh start --mcc 404 --mnc 30 --tac 1   # Start with custom PLMN/TAC
 ./free5gc.sh start --debug        # Start with debug-level logging
 ./free5gc.sh capture start [name] # Start pcap capture (bridge + SBI)
 ./free5gc.sh capture stop         # Stop capture, merge and save pcap
@@ -49,6 +51,23 @@ After starting, provision your subscriber via the **WebUI**:
 ./free5gc.sh status               # Show container status
 ./free5gc.sh logs [nf]            # Tail logs (all or specific: amf, smf, etc.)
 ```
+
+### Custom PLMN / TAC
+
+Pass `--mcc`, `--mnc`, `--tac` to configure the network identity at startup. The script updates all config files (AMF, SMF, NRF, NSSF, gNB, UE) automatically:
+
+```bash
+./free5gc.sh start --mcc 404 --mnc 30 --tac 1        # Indian operator example
+./free5gc.sh start --mcc 310 --mnc 560 --tac 50       # US operator example
+./free5gc.sh start --mcc 001 --mnc 01 --tac 1 --debug # Custom PLMN + debug logging
+```
+
+| Option | Description | Default |
+|--------|-------------|---------|
+| `--mcc` | Mobile Country Code (3 digits) | 001 |
+| `--mnc` | Mobile Network Code (2-3 digits) | 01 |
+| `--tac` | Tracking Area Code (decimal) | 1 |
+| `--debug` | Enable debug-level logging | off |
 
 ### Debug Mode
 
