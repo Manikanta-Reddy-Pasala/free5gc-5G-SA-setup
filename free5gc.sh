@@ -10,6 +10,7 @@
 #   ./free5gc.sh build --quick        # Rebuild runtime images only
 #   ./free5gc.sh start                # Start containers + provision subscriber
 #   ./free5gc.sh start --debug        # Start with debug-level logging
+#   ./free5gc.sh start --mcc 404 --mnc 30 --tac 1   # Start with custom PLMN
 #   ./free5gc.sh capture start [name] # Start pcap capture (bridge + SBI)
 #   ./free5gc.sh capture stop         # Stop capture and save pcap
 #   ./free5gc.sh provision            # Provision subscriber in MongoDB
@@ -33,11 +34,12 @@ CAPTURE_IF="br-free5gc"
 AMF_IP="10.100.200.16"
 NGAP_PORT="38412"
 
-# Subscriber / PLMN
+# Subscriber / PLMN (defaults — overridable via ./free5gc.sh start --mcc --mnc --tac)
 IMSI="imsi-001010000050641"
 PLMN="00101"
 MCC="001"
 MNC="01"
+TAC="1"
 K="0c57e15a2cb86087097a6b50d42531de"
 OPC="109ee52735ae6d3849112cf4175029c7"
 SQN="000000000020"
@@ -419,11 +421,91 @@ db['policyData.ues.smData'].updateOne(
     log "Subscriber ${IMSI} provisioned."
 }
 
+update_configs() {
+    # Update all NF config files with current MCC/MNC/TAC values
+    local cfg_dir="$1"
+    local tac_hex
+    tac_hex=$(printf "%06x" "$TAC")
+
+    log "Updating configs: MCC=${MCC} MNC=${MNC} TAC=${TAC} (hex: ${tac_hex})"
+
+    # amfcfg.yaml — MCC/MNC/TAC/NGAP port
+    if [ -f "${cfg_dir}/amfcfg.yaml" ]; then
+        sed -i "s/^\(\s*-\?\s*mcc:\s*\)[0-9]\{3\}/\1${MCC}/g" "${cfg_dir}/amfcfg.yaml"
+        sed -i "s/^\(\s*-\?\s*mnc:\s*\)[0-9]\{2,3\}/\1${MNC}/g" "${cfg_dir}/amfcfg.yaml"
+        sed -i "s/^\(\s*tac:\s*\)[0-9a-fA-F]\{6\}/\1${tac_hex}/" "${cfg_dir}/amfcfg.yaml"
+        log "  Updated ${cfg_dir}/amfcfg.yaml"
+    fi
+
+    # smfcfg.yaml — MCC/MNC
+    if [ -f "${cfg_dir}/smfcfg.yaml" ]; then
+        sed -i "s/^\(\s*-\?\s*mcc:\s*\)[0-9]\{3\}/\1${MCC}/g" "${cfg_dir}/smfcfg.yaml"
+        sed -i "s/^\(\s*-\?\s*mnc:\s*\)[0-9]\{2,3\}/\1${MNC}/g" "${cfg_dir}/smfcfg.yaml"
+        log "  Updated ${cfg_dir}/smfcfg.yaml"
+    fi
+
+    # nrfcfg.yaml — MCC/MNC
+    if [ -f "${cfg_dir}/nrfcfg.yaml" ]; then
+        sed -i "s/^\(\s*-\?\s*mcc:\s*\)[0-9]\{3\}/\1${MCC}/g" "${cfg_dir}/nrfcfg.yaml"
+        sed -i "s/^\(\s*-\?\s*mnc:\s*\)[0-9]\{2,3\}/\1${MNC}/g" "${cfg_dir}/nrfcfg.yaml"
+        log "  Updated ${cfg_dir}/nrfcfg.yaml"
+    fi
+
+    # nssfcfg.yaml — MCC/MNC (only supportedPlmnList + supportedNssaiInPlmnList)
+    if [ -f "${cfg_dir}/nssfcfg.yaml" ]; then
+        sed -i '/^  supportedPlmnList:/,/^  supportedNssaiInPlmnList:/{s/^\(\s*mcc:\s*\)[0-9]\{3\}/\1'"${MCC}"'/; s/^\(\s*mnc:\s*\)[0-9]\{2,3\}/\1'"${MNC}"'/}' "${cfg_dir}/nssfcfg.yaml"
+        sed -i '/^  supportedNssaiInPlmnList:/,/^  nsiList:/{s/^\(\s*mcc:\s*\)[0-9]\{3\}/\1'"${MCC}"'/; s/^\(\s*mnc:\s*\)[0-9]\{2,3\}/\1'"${MNC}"'/}' "${cfg_dir}/nssfcfg.yaml"
+        log "  Updated ${cfg_dir}/nssfcfg.yaml"
+    fi
+
+    # gnbcfg.yaml — MCC/MNC/TAC (UERANSIM format: quoted strings, decimal TAC)
+    if [ -f "${cfg_dir}/gnbcfg.yaml" ]; then
+        sed -i "s/^mcc: \"[0-9]\{3\}\"/mcc: \"${MCC}\"/" "${cfg_dir}/gnbcfg.yaml"
+        sed -i "s/^mnc: \"[0-9]\{2,3\}\"/mnc: \"${MNC}\"/" "${cfg_dir}/gnbcfg.yaml"
+        sed -i "s/^tac: [0-9]\+/tac: ${TAC}/" "${cfg_dir}/gnbcfg.yaml"
+        log "  Updated ${cfg_dir}/gnbcfg.yaml"
+    fi
+
+    # uecfg.yaml — IMSI/MCC/MNC
+    if [ -f "${cfg_dir}/uecfg.yaml" ]; then
+        sed -i "s/^supi: \"imsi-[0-9]\+\"/supi: \"${IMSI}\"/" "${cfg_dir}/uecfg.yaml"
+        sed -i "s/^mcc: \"[0-9]\{3\}\"/mcc: \"${MCC}\"/" "${cfg_dir}/uecfg.yaml"
+        sed -i "s/^mnc: \"[0-9]\{2,3\}\"/mnc: \"${MNC}\"/" "${cfg_dir}/uecfg.yaml"
+        log "  Updated ${cfg_dir}/uecfg.yaml"
+    fi
+}
+
 cmd_start() {
     local debug=false
-    if [ "${1:-}" = "--debug" ]; then
-        debug=true
+
+    # Parse start sub-arguments
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --debug) debug=true; shift ;;
+            --mcc)   MCC="$2"; shift 2 ;;
+            --mnc)   MNC="$2"; shift 2 ;;
+            --tac)   TAC="$2"; shift 2 ;;
+            *) shift ;;
+        esac
+    done
+
+    # Validate MCC/MNC/TAC
+    if ! [[ "$MCC" =~ ^[0-9]{3}$ ]]; then
+        log "ERROR: MCC must be exactly 3 digits (e.g. 001, 404, 310)"
+        exit 1
     fi
+    if ! [[ "$MNC" =~ ^[0-9]{2,3}$ ]]; then
+        log "ERROR: MNC must be 2 or 3 digits (e.g. 01, 30, 560)"
+        exit 1
+    fi
+    if ! [[ "$TAC" =~ ^[0-9]+$ ]]; then
+        log "ERROR: TAC must be a decimal number (e.g. 1, 100, 33456)"
+        exit 1
+    fi
+
+    # Recompute derived values from (possibly updated) MCC/MNC
+    PLMN="${MCC}${MNC}"
+    IMSI="imsi-${MCC}${MNC}0000050641"
 
     mkdir -p logs/cp logs/upf
 
@@ -435,6 +517,11 @@ cmd_start() {
         export CONFIG_DIR="config"
         log "Mode: NORMAL (config/ with info-level logging)"
     fi
+
+    # Update config files with MCC/MNC/TAC
+    update_configs "$CONFIG_DIR"
+
+    log "PLMN: ${MCC}/${MNC}  TAC: ${TAC}  IMSI: ${IMSI}"
 
     # Start all containers (CP + UPF + UERANSIM)
     log "Step 1/5: Starting containers..."
@@ -824,7 +911,10 @@ show_usage() {
     echo "Commands:"
     echo "  build [--quick]       Build all NFs from source (~15 min)"
     echo "                        --quick: rebuild runtime images only"
-    echo "  start [--debug]       Start all containers"
+    echo "  start [options]       Start all containers"
+    echo "                        --mcc VALUE: Mobile Country Code (3 digits, default: 001)"
+    echo "                        --mnc VALUE: Mobile Network Code (2-3 digits, default: 01)"
+    echo "                        --tac VALUE: Tracking Area Code (decimal, default: 1)"
     echo "                        --debug: use debug-level logging configs"
     echo "  capture start [name]  Start pcap capture (bridge + SBI)"
     echo "  capture stop          Stop capture, merge and save pcap"
@@ -839,6 +929,7 @@ show_usage() {
     echo "Examples:"
     echo "  ./free5gc.sh build"
     echo "  ./free5gc.sh start"
+    echo "  ./free5gc.sh start --mcc 404 --mnc 30 --tac 1"
     echo "  ./free5gc.sh start --debug"
     echo "  ./free5gc.sh capture start my-test"
     echo "  ./free5gc.sh capture stop"
@@ -850,7 +941,7 @@ show_usage() {
 
 case "${1:-}" in
     build)  cmd_build "${2:-}" ;;
-    start)  cmd_start "${2:-}" ;;
+    start)  shift; cmd_start "$@" ;;
     capture) shift; cmd_capture "$@" ;;
     provision) cmd_provision ;;
     ue) shift; cmd_ue "$@" ;;
