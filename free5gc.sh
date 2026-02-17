@@ -317,16 +317,25 @@ cmd_ue() {
 cmd_provision() {
     log "Provisioning subscriber ${IMSI}..."
 
-    # Login to WebUI to get JWT token
+    # Login to WebUI to get JWT token (retry up to 30s for WebUI to become ready)
     log "Logging in to WebUI (port ${WEBUI_PORT})..."
-    local token
-    token=$(curl -s -X POST "http://localhost:${WEBUI_PORT}/api/login" \
-        -H 'Content-Type: application/json' \
-        -d '{"username":"admin","password":"free5gc"}' | \
-        python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])" 2>/dev/null)
+    local token=""
+    local attempt=0
+    local max_attempts=15
+    while [ $attempt -lt $max_attempts ]; do
+        token=$(curl -s --max-time 3 -X POST "http://localhost:${WEBUI_PORT}/api/login" \
+            -H 'Content-Type: application/json' \
+            -d '{"username":"admin","password":"free5gc"}' | \
+            python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])" 2>/dev/null)
+        if [ -n "$token" ] && [ "$token" != "None" ]; then
+            break
+        fi
+        attempt=$((attempt + 1))
+        sleep 2
+    done
 
     if [ -z "$token" ] || [ "$token" = "None" ]; then
-        log "ERROR: Failed to get JWT token from WebUI"
+        log "ERROR: Failed to get JWT token from WebUI after ${max_attempts} attempts"
         return 1
     fi
     log "  JWT token obtained"
