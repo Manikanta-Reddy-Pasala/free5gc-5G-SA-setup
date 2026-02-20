@@ -31,9 +31,14 @@ cd free5gc-5G-SA-setup
 ./free5gc.sh build            # Compile all NFs from source (~15 min first time)
 ./free5gc.sh start            # Start with defaults (MCC=001, MNC=01, TAC=1)
 ./free5gc.sh start --mcc 404 --mnc 30 --tac 1   # Start with custom PLMN
+./free5gc.sh provision        # Provision default subscriber in MongoDB
+./free5gc.sh ue start         # Launch UE, establish PDU session, setup data plane
+./free5gc.sh ue status        # Check UE connectivity
+./free5gc.sh stop             # Stop all containers
+./free5gc.sh remove           # Remove all containers and volumes
 ```
 
-After starting, provision your subscriber via the **WebUI**:
+**WebUI** for subscriber management:
 - **URL**: `http://<server-ip>:4000`
 - **Login**: `admin` / `free5gc`
 
@@ -45,9 +50,14 @@ After starting, provision your subscriber via the **WebUI**:
 ./free5gc.sh start                # Start with defaults (MCC=001, MNC=01, TAC=1)
 ./free5gc.sh start --mcc 404 --mnc 30 --tac 1   # Start with custom PLMN/TAC
 ./free5gc.sh start --debug        # Start with debug-level logging
+./free5gc.sh provision            # Provision subscriber in MongoDB
+./free5gc.sh ue start             # Launch UE + setup data plane
+./free5gc.sh ue stop              # Stop UE + cleanup routes
+./free5gc.sh ue status            # Check UE connectivity
 ./free5gc.sh capture start [name] # Start pcap capture (bridge + SBI)
 ./free5gc.sh capture stop         # Stop capture, merge and save pcap
-./free5gc.sh stop                 # Stop and remove all containers
+./free5gc.sh stop                 # Stop all containers
+./free5gc.sh remove               # Remove all containers and volumes
 ./free5gc.sh status               # Show container status
 ./free5gc.sh logs [nf]            # Tail logs (all or specific: amf, smf, etc.)
 ```
@@ -187,7 +197,7 @@ DEPLOYMENT: 5 containers
 
 ### SCTP Forwarding
 
-Docker cannot proxy SCTP natively. The script automatically sets up iptables DNAT rules during `./free5gc.sh start` to forward host SCTP port 38412 to the AMF container (10.100.200.16). This is required for real gNB connectivity. Rules are cleaned up on `./free5gc.sh stop`.
+Docker cannot proxy SCTP natively. The script automatically sets up iptables DNAT rules during `./free5gc.sh start` to forward host SCTP port 38412 to the AMF container (10.100.200.16). This is required for real gNB connectivity. Rules are cleaned up on `./free5gc.sh stop`. Use `./free5gc.sh remove` to also remove containers and volumes.
 
 ---
 
