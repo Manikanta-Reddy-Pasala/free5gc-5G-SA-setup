@@ -32,6 +32,7 @@ cd free5gc-5G-SA-setup
 ./free5gc.sh start            # Start with defaults (MCC=001, MNC=01, TAC=1)
 ./free5gc.sh start --mcc 404 --mnc 30 --tac 1   # Start with custom PLMN
 ./free5gc.sh provision        # Provision default subscriber in MongoDB
+./free5gc.sh bulk-provision --count 10  # Provision 10 subscribers (SUPI+KEY auto-increment)
 ./free5gc.sh ue start         # Launch UE, establish PDU session, setup data plane
 ./free5gc.sh ue status        # Check UE connectivity
 ./free5gc.sh stop             # Stop all containers
@@ -50,7 +51,11 @@ cd free5gc-5G-SA-setup
 ./free5gc.sh start                # Start with defaults (MCC=001, MNC=01, TAC=1)
 ./free5gc.sh start --mcc 404 --mnc 30 --tac 1   # Start with custom PLMN/TAC
 ./free5gc.sh start --debug        # Start with debug-level logging
-./free5gc.sh provision            # Provision subscriber in MongoDB
+./free5gc.sh provision            # Provision default subscriber in MongoDB
+./free5gc.sh bulk-provision --count 10                    # Provision 10 subscribers
+./free5gc.sh bulk-provision --supi 001010123456789 \
+    --key 00112233445566778899aabbccddeeff \
+    --opc 000102030405060708090a0b0c0d0e0f --count 5     # Custom SUPI/KEY/OPC
 ./free5gc.sh ue start             # Launch UE + setup data plane
 ./free5gc.sh ue stop              # Stop UE + cleanup routes
 ./free5gc.sh ue status            # Check UE connectivity
@@ -78,6 +83,29 @@ Pass `--mcc`, `--mnc`, `--tac` to configure the network identity at startup. The
 | `--mnc` | Mobile Network Code (2-3 digits) | 01 |
 | `--tac` | Tracking Area Code (decimal) | 1 |
 | `--debug` | Enable debug-level logging | off |
+
+### Bulk Provisioning
+
+Provision multiple subscribers at once. SUPI and KEY auto-increment by +1 for each UE, OPC stays the same for all:
+
+```bash
+./free5gc.sh bulk-provision --count 10    # 10 UEs with default SUPI/KEY/OPC
+./free5gc.sh bulk-provision --supi 001010123456789 --key 00112233445566778899aabbccddeeff --opc 000102030405060708090a0b0c0d0e0f --count 5
+```
+
+| Option | Description | Default |
+|--------|-------------|---------|
+| `--supi` | Starting SUPI (digits only, no `imsi-` prefix) | 001010123456789 |
+| `--key` | Starting K (32 hex chars) | 00112233445566778899aabbccddeeff |
+| `--opc` | OPC, same for all UEs (32 hex chars) | 000102030405060708090a0b0c0d0e0f |
+| `--count` | Number of UEs to provision | 1 |
+
+Example with `--count 3` starting from SUPI `001010123456789`:
+| UE | SUPI | KEY |
+|----|------|-----|
+| 1 | imsi-001010123456789 | 00112233445566778899aabbccddeeff |
+| 2 | imsi-001010123456790 | 00112233445566778899aabbccddef00 |
+| 3 | imsi-001010123456791 | 00112233445566778899aabbccddef01 |
 
 ### Debug Mode
 

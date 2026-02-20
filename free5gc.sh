@@ -13,7 +13,8 @@
 #   ./free5gc.sh start --mcc 404 --mnc 30 --tac 1   # Start with custom PLMN
 #   ./free5gc.sh capture start [name] # Start pcap capture (bridge + SBI)
 #   ./free5gc.sh capture stop         # Stop capture and save pcap
-#   ./free5gc.sh provision            # Provision subscriber in MongoDB
+#   ./free5gc.sh provision            # Provision default subscriber in MongoDB
+#   ./free5gc.sh bulk-provision --count 10  # Provision 10 subscribers (SUPI+KEY auto-increment)
 #   ./free5gc.sh ue start               # Launch UE + setup data plane
 #   ./free5gc.sh ue stop                # Stop UE + cleanup routes
 #   ./free5gc.sh ue status              # Check UE connectivity
@@ -315,11 +316,8 @@ cmd_ue() {
     esac
 }
 
-cmd_provision() {
-    log "Provisioning subscriber ${IMSI}..."
-
-    # Login to WebUI to get JWT token (retry up to 30s for WebUI to become ready)
-    log "Logging in to WebUI (port ${WEBUI_PORT})..."
+webui_login() {
+    # Login to WebUI and return JWT token (retry up to 30s)
     local token=""
     local attempt=0
     local max_attempts=15
@@ -329,35 +327,37 @@ cmd_provision() {
             -d '{"username":"admin","password":"free5gc"}' | \
             python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])" 2>/dev/null)
         if [ -n "$token" ] && [ "$token" != "None" ]; then
-            break
+            echo "$token"
+            return 0
         fi
         attempt=$((attempt + 1))
         sleep 2
     done
+    return 1
+}
 
-    if [ -z "$token" ] || [ "$token" = "None" ]; then
-        log "ERROR: Failed to get JWT token from WebUI after ${max_attempts} attempts"
-        return 1
-    fi
-    log "  JWT token obtained"
+provision_one() {
+    # Provision a single subscriber. Args: <imsi> <key> <opc> <token>
+    local p_imsi="$1"
+    local p_key="$2"
+    local p_opc="$3"
+    local p_token="$4"
 
-    # Create subscriber via WebUI API
-    log "Creating subscriber ${IMSI} (PLMN: ${PLMN})..."
     local http_code
     http_code=$(curl -s -o /dev/null -w "%{http_code}" \
-        -X POST "http://localhost:${WEBUI_PORT}/api/subscriber/${IMSI}/${PLMN}" \
+        -X POST "http://localhost:${WEBUI_PORT}/api/subscriber/${p_imsi}/${PLMN}" \
         -H 'Content-Type: application/json' \
-        -H "Token: ${token}" \
+        -H "Token: ${p_token}" \
         -d "{
   \"plmnID\": \"${PLMN}\",
-  \"ueId\": \"${IMSI}\",
+  \"ueId\": \"${p_imsi}\",
   \"AuthenticationSubscription\": {
     \"authenticationMethod\": \"5G_AKA\",
-    \"permanentKey\": {\"permanentKeyValue\": \"${K}\", \"encryptionKey\": 0, \"encryptionAlgorithm\": 0},
+    \"permanentKey\": {\"permanentKeyValue\": \"${p_key}\", \"encryptionKey\": 0, \"encryptionAlgorithm\": 0},
     \"sequenceNumber\": \"${SQN}\",
     \"authenticationManagementField\": \"${AMF_FIELD}\",
     \"milenage\": {\"op\": {\"opValue\": \"\", \"encryptionKey\": 0, \"encryptionAlgorithm\": 0}},
-    \"opc\": {\"opcValue\": \"${OPC}\", \"encryptionKey\": 0, \"encryptionAlgorithm\": 0}
+    \"opc\": {\"opcValue\": \"${p_opc}\", \"encryptionKey\": 0, \"encryptionAlgorithm\": 0}
   },
   \"AccessAndMobilitySubscriptionData\": {
     \"gpsis\": [\"msisdn-0900000000\"],
@@ -395,26 +395,24 @@ cmd_provision() {
 }")
 
     if [ "$http_code" = "201" ] || [ "$http_code" = "200" ]; then
-        log "  Subscriber created (HTTP $http_code)"
+        log "  ${p_imsi} created (HTTP $http_code)"
     elif [ "$http_code" = "409" ]; then
-        log "  Subscriber already exists (HTTP 409)"
+        log "  ${p_imsi} already exists (HTTP 409)"
     else
-        log "WARNING: Unexpected response (HTTP $http_code)"
+        log "  ${p_imsi} WARNING: unexpected response (HTTP $http_code)"
     fi
 
     # Patch MongoDB: add allowedSessionTypes
-    log "Patching MongoDB: adding allowedSessionTypes..."
     docker exec mongodb mongo mongodb://localhost:27017/free5gc --quiet --eval "
 db['subscriptionData.provisionedData.smData'].updateMany(
-  { ueId: '${IMSI}' },
+  { ueId: '${p_imsi}' },
   { \$set: { 'dnnConfigurations.internet.pduSessionTypes.allowedSessionTypes': ['IPV4'] } }
 )" 2>&1 | grep -v "^$"
 
     # Patch MongoDB: populate smPolicySnssaiData
-    log "Patching MongoDB: populating smPolicySnssaiData..."
     docker exec mongodb mongo mongodb://localhost:27017/free5gc --quiet --eval "
 db['policyData.ues.smData'].updateOne(
-  { ueId: '${IMSI}' },
+  { ueId: '${p_imsi}' },
   {
     \$set: {
       smPolicySnssaiData: {
@@ -427,8 +425,90 @@ db['policyData.ues.smData'].updateOne(
   },
   { upsert: true }
 )" 2>&1 | grep -v "^$"
+}
 
+# Increment a hex string by an offset (preserves leading zeros and length)
+hex_add() {
+    local hex_str="$1"
+    local offset="$2"
+    local len=${#hex_str}
+    # Convert hex to decimal, add offset, convert back, zero-pad to original length
+    printf "%0${len}x" $(( 16#${hex_str} + offset ))
+}
+
+cmd_provision() {
+    log "Provisioning subscriber ${IMSI}..."
+    log "Logging in to WebUI (port ${WEBUI_PORT})..."
+    local token
+    token=$(webui_login) || {
+        log "ERROR: Failed to get JWT token from WebUI"
+        return 1
+    }
+    log "  JWT token obtained"
+    provision_one "$IMSI" "$K" "$OPC" "$token"
     log "Subscriber ${IMSI} provisioned."
+}
+
+cmd_bulk_provision() {
+    # Defaults
+    local start_supi="001010123456789"
+    local start_key="00112233445566778899aabbccddeeff"
+    local opc="000102030405060708090a0b0c0d0e0f"
+    local count=1
+
+    # Parse arguments
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --supi)  start_supi="$2"; shift 2 ;;
+            --key)   start_key="$2"; shift 2 ;;
+            --opc)   opc="$2"; shift 2 ;;
+            --count) count="$2"; shift 2 ;;
+            *) log "Unknown option: $1"; return 1 ;;
+        esac
+    done
+
+    # Normalize hex to lowercase
+    start_key=$(echo "$start_key" | tr '[:upper:]' '[:lower:]')
+    opc=$(echo "$opc" | tr '[:upper:]' '[:lower:]')
+
+    if ! [[ "$count" =~ ^[0-9]+$ ]] || [ "$count" -lt 1 ]; then
+        log "ERROR: --count must be a positive integer"
+        return 1
+    fi
+
+    log "Bulk provisioning ${count} subscriber(s)..."
+    log "  Starting SUPI: ${start_supi}"
+    log "  Starting KEY:  ${start_key}"
+    log "  OPC (shared):  ${opc}"
+    echo ""
+
+    log "Logging in to WebUI (port ${WEBUI_PORT})..."
+    local token
+    token=$(webui_login) || {
+        log "ERROR: Failed to get JWT token from WebUI"
+        return 1
+    }
+    log "  JWT token obtained"
+    echo ""
+
+    local success=0
+    local failed=0
+    for (( i=0; i<count; i++ )); do
+        local cur_supi_num=$(( start_supi + i ))
+        local cur_imsi="imsi-${cur_supi_num}"
+        local cur_key
+        cur_key=$(hex_add "$start_key" "$i")
+
+        log "[$(( i + 1 ))/${count}] Provisioning ${cur_imsi} (key: ${cur_key})..."
+        if provision_one "$cur_imsi" "$cur_key" "$opc" "$token"; then
+            success=$((success + 1))
+        else
+            failed=$((failed + 1))
+        fi
+    done
+
+    echo ""
+    log "Bulk provisioning complete: ${success} succeeded, ${failed} failed (total: ${count})"
 }
 
 update_configs() {
@@ -935,7 +1015,12 @@ show_usage() {
     echo "                        --debug: use debug-level logging configs"
     echo "  capture start [name]  Start pcap capture (bridge + SBI)"
     echo "  capture stop          Stop capture, merge and save pcap"
-    echo "  provision             Provision subscriber (IMSI/PLMN) in MongoDB"
+    echo "  provision             Provision default subscriber in MongoDB"
+    echo "  bulk-provision        Provision multiple subscribers"
+    echo "                        --supi VALUE: starting SUPI (default: 001010123456789)"
+    echo "                        --key VALUE: starting K (default: 00112233445566778899aabbccddeeff)"
+    echo "                        --opc VALUE: OPC, same for all (default: 000102030405060708090a0b0c0d0e0f)"
+    echo "                        --count N: number of UEs to provision (default: 1)"
     echo "  ue start              Launch UE, establish PDU session, setup data plane"
     echo "  ue stop               Stop UE and cleanup data plane routes"
     echo "  ue status             Check UE connection and test ping"
@@ -951,6 +1036,8 @@ show_usage() {
     echo "  ./free5gc.sh start --debug"
     echo "  ./free5gc.sh capture start my-test"
     echo "  ./free5gc.sh capture stop"
+    echo "  ./free5gc.sh bulk-provision --count 10"
+    echo "  ./free5gc.sh bulk-provision --supi 001010123456789 --key 00112233445566778899aabbccddeeff --opc 000102030405060708090a0b0c0d0e0f --count 5"
     echo "  ./free5gc.sh stop"
     echo "  ./free5gc.sh logs amf"
 }
@@ -962,6 +1049,7 @@ case "${1:-}" in
     start)  shift; cmd_start "$@" ;;
     capture) shift; cmd_capture "$@" ;;
     provision) cmd_provision ;;
+    bulk-provision) shift; cmd_bulk_provision "$@" ;;
     ue) shift; cmd_ue "$@" ;;
     stop)   cmd_stop ;;
     remove) cmd_remove ;;
