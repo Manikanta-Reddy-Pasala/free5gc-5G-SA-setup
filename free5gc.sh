@@ -17,7 +17,8 @@
 #   ./free5gc.sh ue start               # Launch UE + setup data plane
 #   ./free5gc.sh ue stop                # Stop UE + cleanup routes
 #   ./free5gc.sh ue status              # Check UE connectivity
-#   ./free5gc.sh stop                 # Stop and remove all containers
+#   ./free5gc.sh stop                 # Stop all containers
+#   ./free5gc.sh remove               # Remove all containers and volumes
 #   ./free5gc.sh status               # Show container status
 #   ./free5gc.sh logs [nf]            # Tail logs (all or specific NF)
 # ============================================================
@@ -573,6 +574,7 @@ cmd_start() {
     log "        Login: admin / free5gc"
     log "Logs:   ./free5gc.sh logs"
     log "Stop:   ./free5gc.sh stop"
+    log "Remove: ./free5gc.sh remove"
     echo ""
 }
 
@@ -690,8 +692,14 @@ cmd_stop() {
     log "Cleaning up SCTP forwarding rules..."
     cleanup_sctp_forward
     log "Stopping all containers..."
+    docker compose -f "$COMPOSE_FILE" stop
+    log "All containers stopped."
+}
+
+cmd_remove() {
+    log "Removing all containers and volumes..."
     docker compose -f "$COMPOSE_FILE" down -v
-    log "All containers stopped and volumes removed."
+    log "All containers and volumes removed."
 }
 
 cmd_status() {
@@ -931,7 +939,8 @@ show_usage() {
     echo "  ue start              Launch UE, establish PDU session, setup data plane"
     echo "  ue stop               Stop UE and cleanup data plane routes"
     echo "  ue status             Check UE connection and test ping"
-    echo "  stop                  Stop and remove all containers"
+    echo "  stop                  Stop all containers"
+    echo "  remove                Remove all containers and volumes"
     echo "  status                Show container status"
     echo "  logs [nf]             Tail logs (all or specific: amf, smf, etc.)"
     echo ""
@@ -955,6 +964,7 @@ case "${1:-}" in
     provision) cmd_provision ;;
     ue) shift; cmd_ue "$@" ;;
     stop)   cmd_stop ;;
+    remove) cmd_remove ;;
     status) cmd_status ;;
     logs)   cmd_logs "${2:-}" ;;
     *)      show_usage ;;
