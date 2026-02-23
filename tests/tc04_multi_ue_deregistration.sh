@@ -16,7 +16,7 @@ info "Provisioning ${NUM_UES} subscribers..."
 token=$(get_token) || { fail "Cannot get WebUI token"; exit 1; }
 
 for (( i=0; i<NUM_UES; i++ )); do
-    supi_num=$(( BASE_SUPI + i ))
+    supi_num=$(supi_add "$BASE_SUPI" "$i")
     imsi="imsi-${supi_num}"
     key=$(hex_add "$BASE_KEY" "$i")
     provision_subscriber "$imsi" "$key" "$OPC" "$token" >/dev/null
@@ -29,7 +29,7 @@ info "Launching ${NUM_UES} UEs..."
 kill_all_ues
 TMPDIR=$(mktemp -d)
 for (( i=0; i<NUM_UES; i++ )); do
-    supi_num=$(( BASE_SUPI + i ))
+    supi_num=$(supi_add "$BASE_SUPI" "$i")
     key=$(hex_add "$BASE_KEY" "$i")
     generate_ue_config "$supi_num" "$key" "$OPC" "${TMPDIR}/ue${i}.yaml" "internet"
     docker cp "${TMPDIR}/ue${i}.yaml" ueransim:/ueransim/config/ue${i}.yaml
@@ -40,7 +40,7 @@ sleep 15
 # Step 3: Verify all registered
 registered=0
 for (( i=0; i<NUM_UES; i++ )); do
-    supi_num=$(( BASE_SUPI + i ))
+    supi_num=$(supi_add "$BASE_SUPI" "$i")
     imsi="imsi-${supi_num}"
     status=$(docker exec ueransim ./nr-cli "$imsi" -e "status" 2>/dev/null)
     if echo "$status" | grep -q "RM-REGISTERED"; then
@@ -59,7 +59,7 @@ fi
 echo ""
 info "Deregistering all ${NUM_UES} UEs simultaneously..."
 for (( i=0; i<NUM_UES; i++ )); do
-    supi_num=$(( BASE_SUPI + i ))
+    supi_num=$(supi_add "$BASE_SUPI" "$i")
     imsi="imsi-${supi_num}"
     docker exec ueransim ./nr-cli "$imsi" -e "deregister normal" 2>/dev/null &
 done
@@ -69,7 +69,7 @@ sleep 5
 # Step 5: Verify all deregistered
 deregistered=0
 for (( i=0; i<NUM_UES; i++ )); do
-    supi_num=$(( BASE_SUPI + i ))
+    supi_num=$(supi_add "$BASE_SUPI" "$i")
     imsi="imsi-${supi_num}"
     status=$(docker exec ueransim ./nr-cli "$imsi" -e "status" 2>/dev/null)
     if echo "$status" | grep -q "RM-DEREGISTERED"; then

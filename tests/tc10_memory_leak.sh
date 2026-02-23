@@ -48,7 +48,7 @@ token=$(get_token) || { fail "Cannot get WebUI token"; exit 1; }
 TMPDIR=$(mktemp -d)
 
 for (( i=0; i<NUM_UES; i++ )); do
-    supi_num=$(( BASE_SUPI + i ))
+    supi_num=$(supi_add "$BASE_SUPI" "$i")
     imsi="imsi-${supi_num}"
     key=$(hex_add "$BASE_KEY" "$i")
     provision_subscriber "$imsi" "$key" "$OPC" "$token" >/dev/null
@@ -87,7 +87,7 @@ for (( cycle=1; cycle<=CYCLES; cycle++ )); do
 
     # Deregister all UEs
     for (( i=0; i<NUM_UES; i++ )); do
-        supi_num=$(( BASE_SUPI + i ))
+        supi_num=$(supi_add "$BASE_SUPI" "$i")
         imsi="imsi-${supi_num}"
         docker exec ueransim ./nr-cli "$imsi" -e "deregister normal" 2>/dev/null &
     done

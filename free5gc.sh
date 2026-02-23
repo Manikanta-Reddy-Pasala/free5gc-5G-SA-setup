@@ -494,7 +494,8 @@ cmd_bulk_provision() {
     local success=0
     local failed=0
     for (( i=0; i<count; i++ )); do
-        local cur_supi_num=$(( start_supi + i ))
+        local cur_supi_num
+        cur_supi_num=$(python3 -c "print(format(int('${start_supi}')+${i},'0${#start_supi}d'))")
         local cur_imsi="imsi-${cur_supi_num}"
         local cur_key
         cur_key=$(hex_add "$start_key" "$i")

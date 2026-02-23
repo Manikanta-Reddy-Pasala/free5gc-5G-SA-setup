@@ -16,7 +16,7 @@ info "Provisioning ${NUM_UES} subscribers..."
 token=$(get_token) || { fail "Cannot get WebUI token"; exit 1; }
 
 for (( i=0; i<NUM_UES; i++ )); do
-    supi_num=$(( BASE_SUPI + i ))
+    supi_num=$(supi_add "$BASE_SUPI" "$i")
     imsi="imsi-${supi_num}"
     key=$(hex_add "$BASE_KEY" "$i")
     http_code=$(provision_subscriber "$imsi" "$key" "$OPC" "$token")
@@ -33,7 +33,7 @@ info "Generating UE configs..."
 kill_all_ues
 TMPDIR=$(mktemp -d)
 for (( i=0; i<NUM_UES; i++ )); do
-    supi_num=$(( BASE_SUPI + i ))
+    supi_num=$(supi_add "$BASE_SUPI" "$i")
     key=$(hex_add "$BASE_KEY" "$i")
     generate_ue_config "$supi_num" "$key" "$OPC" "${TMPDIR}/ue${i}.yaml" "internet"
     docker cp "${TMPDIR}/ue${i}.yaml" ueransim:/ueransim/config/ue${i}.yaml
@@ -54,7 +54,7 @@ sleep 15
 passed=0
 failed_count=0
 for (( i=0; i<NUM_UES; i++ )); do
-    supi_num=$(( BASE_SUPI + i ))
+    supi_num=$(supi_add "$BASE_SUPI" "$i")
     imsi="imsi-${supi_num}"
     status=$(docker exec ueransim ./nr-cli "$imsi" -e "status" 2>/dev/null)
     if echo "$status" | grep -q "RM-REGISTERED"; then

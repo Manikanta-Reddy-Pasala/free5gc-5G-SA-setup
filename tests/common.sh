@@ -167,7 +167,15 @@ hex_add() {
     local hex_str="$1"
     local offset="$2"
     local len=${#hex_str}
-    printf "%0${len}x" $(( 16#${hex_str} + offset ))
+    python3 -c "print(format(int('${hex_str}',16)+${offset},'0${len}x'))"
+}
+
+# Increment SUPI (decimal digit string) by offset (preserves length)
+supi_add() {
+    local supi="$1"
+    local offset="$2"
+    local len=${#supi}
+    python3 -c "print(format(int('${supi}')+${offset},'0${len}d'))"
 }
 
 # Generate a UE config YAML for UERANSIM
