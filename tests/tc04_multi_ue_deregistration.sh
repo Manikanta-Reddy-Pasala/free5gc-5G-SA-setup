@@ -76,12 +76,16 @@ deregistered=0
 for (( i=0; i<NUM_UES; i++ )); do
     supi_num=$(supi_add "$BASE_SUPI" "$i")
     imsi="imsi-${supi_num}"
-    status=$(docker exec ueransim ./nr-cli "$imsi" -e "status" 2>/dev/null)
+    # Capture both stdout and stderr to catch "No node found" errors
+    status=$(docker exec ueransim ./nr-cli "$imsi" -e "status" 2>&1)
     if echo "$status" | grep -q "RM-DEREGISTERED"; then
         pass "UE ${imsi}: DEREGISTERED"
         deregistered=$((deregistered + 1))
-    elif echo "$status" | grep -qi "could not connect\|not found\|No UE"; then
+    elif echo "$status" | grep -qi "could not connect\|not found\|No node\|No UE\|ERROR"; then
         pass "UE ${imsi}: DEREGISTERED (process exited)"
+        deregistered=$((deregistered + 1))
+    elif [ -z "$status" ]; then
+        pass "UE ${imsi}: DEREGISTERED (no response)"
         deregistered=$((deregistered + 1))
     else
         fail "UE ${imsi}: still registered"

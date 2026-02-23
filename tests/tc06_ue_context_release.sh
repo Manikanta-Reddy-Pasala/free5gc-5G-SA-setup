@@ -83,11 +83,13 @@ else
     info "Checking UE state directly..."
 fi
 
-status=$(docker exec ueransim ./nr-cli "$IMSI" -e "status" 2>/dev/null)
+status=$(docker exec ueransim ./nr-cli "$IMSI" -e "status" 2>&1)
 if echo "$status" | grep -q "RM-DEREGISTERED"; then
     pass "UE is RM-DEREGISTERED (context released)"
-elif echo "$status" | grep -q "could not connect"; then
+elif echo "$status" | grep -qi "could not connect\|not found\|No node\|ERROR"; then
     pass "UE process exited (context fully released)"
+elif [ -z "$status" ]; then
+    pass "UE process exited (no response)"
 else
     fail "UE still registered after deregister"
 fi

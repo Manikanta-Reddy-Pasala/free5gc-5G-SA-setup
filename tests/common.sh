@@ -275,6 +275,33 @@ ensure_core_running() {
     info "Resetting UERANSIM gNB (clearing residual state)..."
     docker restart ueransim >/dev/null 2>&1
     sleep 10
+    # Auto-provision DEFAULT_IMSI if not already in DB (needed for tests using default UE config)
+    _ensure_default_subscriber
+}
+
+# Provision the DEFAULT_IMSI subscriber if it doesn't exist in the database
+_ensure_default_subscriber() {
+    local supi
+    supi=$(echo "$DEFAULT_IMSI" | sed 's/imsi-//')
+    # Check if already provisioned (quick check via WebUI API)
+    local token
+    token=$(get_token 2>/dev/null) || return 0
+    local check
+    check=$(curl -s -o /dev/null -w "%{http_code}" --max-time 3 \
+        "http://localhost:${WEBUI_PORT}/api/subscriber/${DEFAULT_IMSI}/${PLMN}" \
+        -H "Token: ${token}" 2>/dev/null)
+    if [ "$check" = "200" ]; then
+        return 0  # already exists
+    fi
+    info "Auto-provisioning DEFAULT_IMSI (${DEFAULT_IMSI})..."
+    # Read key/opc from UE config if possible
+    local ue_key ue_opc
+    ue_key=$(docker exec ueransim grep '^key:' ./config/uecfg.yaml 2>/dev/null | awk '{print $2}' | tr -d '"')
+    ue_opc=$(docker exec ueransim grep '^op:' ./config/uecfg.yaml 2>/dev/null | awk '{print $2}' | tr -d '"')
+    ue_key="${ue_key:-$BASE_KEY}"
+    ue_opc="${ue_opc:-$OPC}"
+    provision_subscriber "$DEFAULT_IMSI" "$ue_key" "$ue_opc" "$token" >/dev/null
+    patch_mongodb "$DEFAULT_IMSI" 2>/dev/null
 }
 
 # Kill all UE processes inside UERANSIM container
