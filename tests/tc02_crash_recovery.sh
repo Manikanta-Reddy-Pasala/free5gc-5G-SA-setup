@@ -98,12 +98,12 @@ fi
 # Restart UERANSIM gNB to reconnect to AMF
 info "Restarting UERANSIM gNB..."
 docker restart ueransim >/dev/null 2>&1
-sleep 10
+sleep 15
 
 # Verify UE can register after CP recovery
 info "Registering UE after CP recovery..."
 docker exec -d ueransim ./nr-ue -c ./config/uecfg.yaml
-sleep 10
+sleep 15
 status=$(docker exec ueransim ./nr-cli "$imsi" -e "status" 2>/dev/null)
 if echo "$status" | grep -q "RM-REGISTERED"; then
     pass "UE re-registered after CP recovery"
@@ -137,10 +137,17 @@ else
     fail "MongoDB failed to restart"
 fi
 
+# Restart CP and UERANSIM to reconnect to MongoDB
+info "Restarting CP and UERANSIM to reconnect to MongoDB..."
+docker restart free5gc-cp >/dev/null 2>&1
+sleep 20
+docker restart ueransim >/dev/null 2>&1
+sleep 15
+
 # Verify UE can register after MongoDB recovery
 info "Registering UE after MongoDB recovery..."
 docker exec -d ueransim ./nr-ue -c ./config/uecfg.yaml
-sleep 10
+sleep 15
 status=$(docker exec ueransim ./nr-cli "$imsi" -e "status" 2>/dev/null)
 if echo "$status" | grep -q "RM-REGISTERED"; then
     pass "UE re-registered after MongoDB recovery"
