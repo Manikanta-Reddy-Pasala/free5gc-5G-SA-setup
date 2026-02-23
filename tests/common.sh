@@ -283,15 +283,15 @@ ensure_core_running() {
 _ensure_default_subscriber() {
     local supi
     supi=$(echo "$DEFAULT_IMSI" | sed 's/imsi-//')
-    # Check if already provisioned (quick check via WebUI API)
+    # Check if already provisioned (verify authenticationMethod is set)
     local token
     token=$(get_token 2>/dev/null) || return 0
-    local check
-    check=$(curl -s -o /dev/null -w "%{http_code}" --max-time 3 \
+    local check_body
+    check_body=$(curl -s --max-time 3 \
         "http://localhost:${WEBUI_PORT}/api/subscriber/${DEFAULT_IMSI}/${PLMN}" \
         -H "Token: ${token}" 2>/dev/null)
-    if [ "$check" = "200" ]; then
-        return 0  # already exists
+    if echo "$check_body" | grep -q '"authenticationMethod":"5G_AKA"'; then
+        return 0  # already properly provisioned
     fi
     info "Auto-provisioning DEFAULT_IMSI (${DEFAULT_IMSI})..."
     # Read key/opc from UE config if possible
