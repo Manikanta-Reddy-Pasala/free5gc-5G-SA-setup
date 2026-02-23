@@ -323,6 +323,37 @@ Use the WebUI to add, edit, and delete subscribers. Each subscriber needs matchi
 
 ---
 
+## Test Suite
+
+Automated test scripts in `tests/` covering 10 test cases:
+
+```bash
+./tests/run_all.sh              # Run all 10 tests
+./tests/run_all.sh 1 3 5        # Run specific tests (TC01, TC03, TC05)
+./tests/run_all.sh --list       # List available tests
+```
+
+| TC | Script | Description |
+|----|--------|-------------|
+| 01 | `tc01_parallel_registration.sh` | Parallel registration of multiple UEs |
+| 02 | `tc02_crash_recovery.sh` | Component crash (CP/UPF/MongoDB) and recovery |
+| 03 | `tc03_multi_apn.sh` | Two APNs (internet + ims) per UE |
+| 04 | `tc04_multi_ue_deregistration.sh` | Simultaneous deregistration of multiple UEs |
+| 05 | `tc05_paging_idle_ue.sh` | Paging idle UE with downlink data |
+| 06 | `tc06_ue_context_release.sh` | UE context release (RLF + graceful) |
+| 07 | `tc07_ran_config_update.sh` | RAN config update (TAC change) |
+| 08 | `tc08_ng_reset.sh` | NG Reset (SCTP association restart) |
+| 09 | `tc09_warning_message.sh` | PWS/CMAS warning message transmission |
+| 10 | `tc10_memory_leak.sh` | Memory leak detection across reg/dereg cycles |
+
+Individual tests can be run directly:
+```bash
+./tests/tc01_parallel_registration.sh 10    # 10 UEs (default: 5)
+./tests/tc10_memory_leak.sh 20 5            # 20 cycles, 5 UEs per cycle
+```
+
+---
+
 ## Documentation
 
 | Document | Description |

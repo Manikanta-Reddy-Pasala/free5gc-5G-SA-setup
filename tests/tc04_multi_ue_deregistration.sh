@@ -1,0 +1,97 @@
+#!/bin/bash
+# ============================================================
+# TC04: Multi-UE De-Registration
+# Register multiple UEs, then deregister all simultaneously
+# ============================================================
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/common.sh"
+
+NUM_UES="${1:-3}"
+
+header "TC04: Multi-UE De-Registration (${NUM_UES} UEs)"
+
+ensure_core_running
+
+# Step 1: Provision subscribers
+info "Provisioning ${NUM_UES} subscribers..."
+token=$(get_token) || { fail "Cannot get WebUI token"; exit 1; }
+
+for (( i=0; i<NUM_UES; i++ )); do
+    supi_num=$(( BASE_SUPI + i ))
+    imsi="imsi-${supi_num}"
+    key=$(hex_add "$BASE_KEY" "$i")
+    provision_subscriber "$imsi" "$key" "$OPC" "$token" >/dev/null
+    patch_mongodb "$imsi"
+done
+pass "Provisioned ${NUM_UES} subscribers"
+
+# Step 2: Generate configs and launch UEs
+info "Launching ${NUM_UES} UEs..."
+kill_all_ues
+TMPDIR=$(mktemp -d)
+for (( i=0; i<NUM_UES; i++ )); do
+    supi_num=$(( BASE_SUPI + i ))
+    key=$(hex_add "$BASE_KEY" "$i")
+    generate_ue_config "$supi_num" "$key" "$OPC" "${TMPDIR}/ue${i}.yaml" "internet"
+    docker cp "${TMPDIR}/ue${i}.yaml" ueransim:/ueransim/config/ue${i}.yaml
+    docker exec -d ueransim ./nr-ue -c ./config/ue${i}.yaml
+done
+sleep 15
+
+# Step 3: Verify all registered
+registered=0
+for (( i=0; i<NUM_UES; i++ )); do
+    supi_num=$(( BASE_SUPI + i ))
+    imsi="imsi-${supi_num}"
+    status=$(docker exec ueransim ./nr-cli "$imsi" -e "status" 2>/dev/null)
+    if echo "$status" | grep -q "RM-REGISTERED"; then
+        pass "UE ${imsi}: REGISTERED"
+        registered=$((registered + 1))
+    else
+        fail "UE ${imsi}: NOT REGISTERED"
+    fi
+done
+
+if [ "$registered" -lt "$NUM_UES" ]; then
+    warn "Only ${registered}/${NUM_UES} registered. Proceeding with deregistration of those."
+fi
+
+# Step 4: Deregister all UEs simultaneously
+echo ""
+info "Deregistering all ${NUM_UES} UEs simultaneously..."
+for (( i=0; i<NUM_UES; i++ )); do
+    supi_num=$(( BASE_SUPI + i ))
+    imsi="imsi-${supi_num}"
+    docker exec ueransim ./nr-cli "$imsi" -e "deregister normal" 2>/dev/null &
+done
+wait
+sleep 5
+
+# Step 5: Verify all deregistered
+deregistered=0
+for (( i=0; i<NUM_UES; i++ )); do
+    supi_num=$(( BASE_SUPI + i ))
+    imsi="imsi-${supi_num}"
+    status=$(docker exec ueransim ./nr-cli "$imsi" -e "status" 2>/dev/null)
+    if echo "$status" | grep -q "RM-DEREGISTERED"; then
+        pass "UE ${imsi}: DEREGISTERED"
+        deregistered=$((deregistered + 1))
+    elif echo "$status" | grep -q "could not connect"; then
+        pass "UE ${imsi}: DEREGISTERED (process exited)"
+        deregistered=$((deregistered + 1))
+    else
+        fail "UE ${imsi}: still registered"
+        echo "$status" | head -3
+    fi
+done
+
+# Cleanup
+kill_all_ues
+rm -rf "$TMPDIR"
+
+# Summary
+echo ""
+if [ "$deregistered" -eq "$NUM_UES" ]; then
+    echo -e "${GREEN}${BOLD}TC04 PASSED${NC}: All ${NUM_UES} UEs deregistered successfully"
+else
+    echo -e "${RED}${BOLD}TC04 FAILED${NC}: ${deregistered}/${NUM_UES} deregistered"
+fi
