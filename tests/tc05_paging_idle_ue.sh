@@ -10,7 +10,7 @@ header "TC05: Paging for Idle UEs"
 
 ensure_core_running
 
-IMSI="imsi-001010000050641"
+IMSI="$DEFAULT_IMSI"
 
 # Step 1: Register UE and establish PDU session
 info "Registering UE and establishing PDU session..."

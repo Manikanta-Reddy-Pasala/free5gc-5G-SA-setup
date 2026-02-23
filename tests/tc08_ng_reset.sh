@@ -10,7 +10,7 @@ header "TC08: NG Reset Procedure"
 
 ensure_core_running
 
-IMSI="imsi-001010000050641"
+IMSI="$DEFAULT_IMSI"
 
 # Step 1: Register UE (baseline)
 info "Establishing baseline - registering UE..."

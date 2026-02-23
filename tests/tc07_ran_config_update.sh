@@ -9,7 +9,7 @@ header "TC07: RAN Configuration Update (PLMN/TAC Change)"
 
 ensure_core_running
 
-IMSI="imsi-001010000050641"
+IMSI="$DEFAULT_IMSI"
 
 # Step 1: Verify baseline with current config
 info "Verifying baseline gNB-AMF connection..."
@@ -38,13 +38,16 @@ else
 fi
 kill_all_ues
 
-# Step 2: Update TAC configuration
-NEW_TAC="2"
+# Step 2: Read current TAC and compute new TAC
+ORIG_TAC=$(docker exec ueransim grep '^tac:' ./config/gnbcfg.yaml 2>/dev/null | awk '{print $2}')
+ORIG_TAC="${ORIG_TAC:-1}"
+ORIG_TAC_HEX=$(printf "%06x" "$ORIG_TAC")
+NEW_TAC=$((ORIG_TAC + 1))
 NEW_TAC_HEX=$(printf "%06x" "$NEW_TAC")
-info "Updating TAC from 1 to ${NEW_TAC}..."
+info "Updating TAC from ${ORIG_TAC} to ${NEW_TAC}..."
 
 # Update AMF config inside container
-docker exec free5gc-cp sh -c "sed -i 's/tac: 000001/tac: ${NEW_TAC_HEX}/' /free5gc/config/amfcfg.yaml"
+docker exec free5gc-cp sh -c "sed -i 's/tac: ${ORIG_TAC_HEX}/tac: ${NEW_TAC_HEX}/' /free5gc/config/amfcfg.yaml"
 info "Updated AMF TAC to ${NEW_TAC_HEX}"
 
 # Update gNB config
@@ -103,9 +106,9 @@ fi
 kill_all_ues
 
 # Step 6: Restore original TAC
-info "Restoring original TAC (1)..."
-docker exec free5gc-cp sh -c "sed -i 's/tac: ${NEW_TAC_HEX}/tac: 000001/' /free5gc/config/amfcfg.yaml"
-docker exec ueransim sh -c "sed -i 's/^tac: ${NEW_TAC}/tac: 1/' /ueransim/config/gnbcfg.yaml"
+info "Restoring original TAC (${ORIG_TAC})..."
+docker exec free5gc-cp sh -c "sed -i 's/tac: ${NEW_TAC_HEX}/tac: ${ORIG_TAC_HEX}/' /free5gc/config/amfcfg.yaml"
+docker exec ueransim sh -c "sed -i 's/^tac: ${NEW_TAC}/tac: ${ORIG_TAC}/' /ueransim/config/gnbcfg.yaml"
 docker restart free5gc-cp >/dev/null 2>&1
 sleep 30
 docker restart ueransim >/dev/null 2>&1
@@ -114,4 +117,4 @@ pass "Original config restored"
 
 # Summary
 echo ""
-echo -e "${BOLD}TC07 Complete${NC}: RAN config update tested with TAC change ${CYAN}1 -> ${NEW_TAC} -> 1${NC}"
+echo -e "${BOLD}TC07 Complete${NC}: RAN config update tested with TAC change ${CYAN}${ORIG_TAC} -> ${NEW_TAC} -> ${ORIG_TAC}${NC}"

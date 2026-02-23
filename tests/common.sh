@@ -17,21 +17,36 @@ CYAN=$'\033[0;36m'
 BOLD=$'\033[1m'
 NC=$'\033[0m'
 
-# Test defaults
+# Test defaults (static)
 WEBUI_PORT=4000
-PLMN="00101"
-MCC="001"
-MNC="01"
 SST=3
 SD="198153"
 DNN="internet"
 SQN="000000000020"
 AMF_FIELD="8000"
-
-# Subscriber defaults for test UEs
-BASE_SUPI="001010123456789"
 BASE_KEY="00112233445566778899aabbccddeeff"
 OPC="000102030405060708090a0b0c0d0e0f"
+
+# Auto-detect PLMN from running gNB config inside UERANSIM container
+_detect_plmn() {
+    local gnb_cfg
+    gnb_cfg=$(docker exec ueransim cat ./config/gnbcfg.yaml 2>/dev/null)
+    if [ -n "$gnb_cfg" ]; then
+        MCC=$(echo "$gnb_cfg" | grep '^mcc:' | head -1 | awk '{print $2}' | tr -d '"')
+        MNC=$(echo "$gnb_cfg" | grep '^mnc:' | head -1 | awk '{print $2}' | tr -d '"')
+    fi
+    # Fallback defaults if detection fails
+    MCC="${MCC:-001}"
+    MNC="${MNC:-01}"
+    PLMN="${MCC}${MNC}"
+    # Derive BASE_SUPI from PLMN: <MCC><MNC padded to 2-3>0123456789
+    BASE_SUPI="${MCC}${MNC}0123456789"
+}
+_detect_plmn
+
+# Auto-detect the default IMSI from the UE config inside the container
+DEFAULT_IMSI=$(docker exec ueransim grep '^supi:' ./config/uecfg.yaml 2>/dev/null | awk '{print $2}' | tr -d '"')
+DEFAULT_IMSI="${DEFAULT_IMSI:-imsi-${MCC}${MNC}0000050641}"
 
 pass() { echo -e "  ${GREEN}PASS${NC}: $1"; }
 fail() { echo -e "  ${RED}FAIL${NC}: $1"; }

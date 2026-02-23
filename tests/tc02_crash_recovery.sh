@@ -15,7 +15,7 @@ kill_all_ues
 docker exec -d ueransim ./nr-ue -c ./config/uecfg.yaml
 sleep 10
 
-imsi="imsi-001010000050641"
+imsi="$DEFAULT_IMSI"
 status=$(docker exec ueransim ./nr-cli "$imsi" -e "status" 2>/dev/null)
 if echo "$status" | grep -q "RM-REGISTERED"; then
     pass "Baseline UE registered"

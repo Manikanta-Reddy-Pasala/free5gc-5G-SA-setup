@@ -9,7 +9,7 @@ header "TC06: UE Context Release Procedure"
 
 ensure_core_running
 
-IMSI="imsi-001010000050641"
+IMSI="$DEFAULT_IMSI"
 
 # Step 1: Register UE
 info "Registering UE..."

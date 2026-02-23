@@ -12,7 +12,7 @@ header "TC09: Warning Message Transmission (PWS/CMAS)"
 
 ensure_core_running
 
-IMSI="imsi-001010000050641"
+IMSI="$DEFAULT_IMSI"
 
 # Step 1: Register UE to ensure gNB-AMF connection is active
 info "Registering UE to establish gNB-AMF link..."
