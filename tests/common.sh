@@ -85,6 +85,9 @@ provision_subscriber() {
     local key="$2"
     local opc="$3"
     local token="$4"
+    # Derive unique MSISDN from IMSI to avoid duplicate GPSI errors
+    local msisdn
+    msisdn="msisdn-$(echo "$imsi" | sed 's/imsi-//')"
 
     curl -s -o /dev/null -w "%{http_code}" \
         -X POST "http://localhost:${WEBUI_PORT}/api/subscriber/${imsi}/${PLMN}" \
@@ -102,7 +105,7 @@ provision_subscriber() {
     \"opc\": {\"opcValue\": \"${opc}\", \"encryptionKey\": 0, \"encryptionAlgorithm\": 0}
   },
   \"AccessAndMobilitySubscriptionData\": {
-    \"gpsis\": [\"msisdn-0900000000\"],
+    \"gpsis\": [\"${msisdn}\"],
     \"subscribedUeAmbr\": {\"downlink\": \"2 Gbps\", \"uplink\": \"1 Gbps\"},
     \"nssai\": {
       \"defaultSingleNssais\": [{\"sst\": ${SST}, \"sd\": \"${SD}\"}],
