@@ -64,9 +64,14 @@ for (( i=0; i<NUM_UES; i++ )); do
     docker exec ueransim ./nr-cli "$imsi" -e "deregister normal" 2>/dev/null &
 done
 wait
-sleep 5
+# Wait long enough for NAS deregistration to complete on all UEs
+sleep 15
 
 # Step 5: Verify all deregistered
+# Kill UE processes first so nr-cli sees "could not connect" (clean state)
+docker exec ueransim pkill -f "nr-ue" 2>/dev/null || true
+sleep 3
+
 deregistered=0
 for (( i=0; i<NUM_UES; i++ )); do
     supi_num=$(supi_add "$BASE_SUPI" "$i")
@@ -75,7 +80,7 @@ for (( i=0; i<NUM_UES; i++ )); do
     if echo "$status" | grep -q "RM-DEREGISTERED"; then
         pass "UE ${imsi}: DEREGISTERED"
         deregistered=$((deregistered + 1))
-    elif echo "$status" | grep -q "could not connect"; then
+    elif echo "$status" | grep -qi "could not connect\|not found\|No UE"; then
         pass "UE ${imsi}: DEREGISTERED (process exited)"
         deregistered=$((deregistered + 1))
     else

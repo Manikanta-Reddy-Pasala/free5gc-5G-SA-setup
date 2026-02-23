@@ -37,16 +37,28 @@ fi
 # Step 3: Test AMF N1N2 message transfer API (used for warning messages)
 # The AMF N1N2 API is how CBE -> CBC -> AMF -> gNB warning flow works
 info "Testing AMF SBI endpoint availability..."
-amf_health=$(curl -s -o /dev/null -w "%{http_code}" "http://localhost:8006" 2>/dev/null || echo "000")
+# Get AMF container IP to reach SBI from host (curl may not be in CP container)
+AMF_IP=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' free5gc-cp 2>/dev/null)
+AMF_SBI_URL="http://${AMF_IP:-localhost}:8000"
+
+amf_health=$(curl -s -o /dev/null -w "%{http_code}" --max-time 5 "${AMF_SBI_URL}" 2>/dev/null || echo "000")
 if [ "$amf_health" != "000" ]; then
-    pass "AMF SBI reachable (HTTP ${amf_health})"
+    pass "AMF SBI reachable at ${AMF_SBI_URL} (HTTP ${amf_health})"
 else
-    # AMF SBI is internal to the container, try from inside
-    amf_health=$(docker exec free5gc-cp curl -s -o /dev/null -w "%{http_code}" "http://localhost:8006" 2>/dev/null || echo "000")
+    # Try alternate port
+    AMF_SBI_URL="http://${AMF_IP:-localhost}:8006"
+    amf_health=$(curl -s -o /dev/null -w "%{http_code}" --max-time 5 "${AMF_SBI_URL}" 2>/dev/null || echo "000")
     if [ "$amf_health" != "000" ]; then
-        pass "AMF SBI reachable from inside container (HTTP ${amf_health})"
+        pass "AMF SBI reachable at ${AMF_SBI_URL} (HTTP ${amf_health})"
     else
-        warn "AMF SBI not reachable"
+        # Try wget inside container as last resort
+        amf_health=$(docker exec free5gc-cp wget -q -O /dev/null --spider "http://localhost:8000" 2>&1 && echo "200" || echo "000")
+        if [ "$amf_health" != "000" ]; then
+            pass "AMF SBI reachable from inside container (wget)"
+            AMF_SBI_URL="http://localhost:8000"
+        else
+            warn "AMF SBI not reachable (tried ${AMF_IP}:8000, :8006)"
+        fi
     fi
 fi
 
@@ -54,24 +66,29 @@ fi
 # In a real deployment, CBC sends this. We simulate it via the AMF's N2 Namf_Communication API.
 info "Simulating Write-Replace Warning Request via AMF API..."
 
-# The warning message JSON payload following 3GPP TS 29.518
-WARN_PAYLOAD='{
-  "messageType": "WRITE_REPLACE_WARNING",
-  "serialNumber": "0001",
-  "messageIdentifier": "1234",
-  "repetitionPeriod": 10,
-  "numberOfBroadcastsRequested": 3,
-  "warningAreaList": {
-    "taiList": [{"plmnId": {"mcc": "001", "mnc": "01"}, "tac": "000001"}]
-  },
-  "warningMessageContents": "VGVzdCBXYXJuaW5nIE1lc3NhZ2U=",
-  "dataCodingScheme": "01",
-  "warningType": "0200"
-}'
+# Read TAC from gNB config
+CURRENT_TAC=$(docker exec ueransim grep '^tac:' ./config/gnbcfg.yaml 2>/dev/null | awk '{print $2}')
+CURRENT_TAC="${CURRENT_TAC:-1}"
+CURRENT_TAC_HEX=$(printf "%06x" "$CURRENT_TAC")
 
-# Try sending via AMF non-UE N2 message API
-warn_response=$(docker exec free5gc-cp curl -s -w "\n%{http_code}" \
-    -X POST "http://localhost:8006/namf-comm/v1/non-ue-n2-messages/transfer" \
+# The warning message JSON payload following 3GPP TS 29.518
+WARN_PAYLOAD="{
+  \"messageType\": \"WRITE_REPLACE_WARNING\",
+  \"serialNumber\": \"0001\",
+  \"messageIdentifier\": \"1234\",
+  \"repetitionPeriod\": 10,
+  \"numberOfBroadcastsRequested\": 3,
+  \"warningAreaList\": {
+    \"taiList\": [{\"plmnId\": {\"mcc\": \"${MCC}\", \"mnc\": \"${MNC}\"}, \"tac\": \"${CURRENT_TAC_HEX}\"}]
+  },
+  \"warningMessageContents\": \"VGVzdCBXYXJuaW5nIE1lc3NhZ2U=\",
+  \"dataCodingScheme\": \"01\",
+  \"warningType\": \"0200\"
+}"
+
+# Try sending via AMF non-UE N2 message API (from host using container IP)
+warn_response=$(curl -s -w "\n%{http_code}" --max-time 10 \
+    -X POST "${AMF_SBI_URL}/namf-comm/v1/non-ue-n2-messages/transfer" \
     -H 'Content-Type: application/json' \
     -d "$WARN_PAYLOAD" 2>/dev/null)
 

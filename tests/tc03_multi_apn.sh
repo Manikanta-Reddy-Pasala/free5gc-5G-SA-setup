@@ -12,7 +12,7 @@ header "TC03: Multi-APN (Two DNNs per UE)"
 
 ensure_core_running
 
-SUPI="001010123456789"
+SUPI="$BASE_SUPI"
 IMSI="imsi-${SUPI}"
 KEY="$BASE_KEY"
 
@@ -20,7 +20,7 @@ KEY="$BASE_KEY"
 info "Checking if 'ims' DNN is supported in AMF config..."
 if ! docker exec free5gc-cp grep -q "ims" /free5gc/config/amfcfg.yaml 2>/dev/null; then
     warn "'ims' DNN not in AMF config. Adding it..."
-    docker exec free5gc-cp sh -c "sed -i '/- internet/a\    - ims' /free5gc/config/amfcfg.yaml"
+    docker exec free5gc-cp sh -c "sed '/- internet/a\\    - ims' /free5gc/config/amfcfg.yaml > /tmp/amfcfg.yaml && cat /tmp/amfcfg.yaml > /free5gc/config/amfcfg.yaml && rm /tmp/amfcfg.yaml"
     info "Added 'ims' to AMF supportDnnList. Restart CP to apply."
     docker restart free5gc-cp >/dev/null 2>&1
     sleep 30

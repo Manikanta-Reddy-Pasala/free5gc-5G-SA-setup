@@ -259,7 +259,7 @@ integrityMaxRate:
 UECFG
 }
 
-# Ensure core is running, or start it
+# Ensure core is running, or start it. Also clean residual UE state.
 ensure_core_running() {
     local cp_state
     cp_state=$(docker inspect --format='{{.State.Status}}' free5gc-cp 2>/dev/null || echo "missing")
@@ -269,10 +269,23 @@ ensure_core_running() {
     else
         info "Core is already running."
     fi
+    # Clean residual UE state from previous tests
+    kill_all_ues
+    # Restart gNB to clear accumulated UE context (avoids cross-test interference)
+    info "Resetting UERANSIM gNB (clearing residual state)..."
+    docker restart ueransim >/dev/null 2>&1
+    sleep 10
 }
 
 # Kill all UE processes inside UERANSIM container
 kill_all_ues() {
     docker exec ueransim pkill -f "nr-ue" 2>/dev/null || true
-    sleep 1
+    sleep 2
+}
+
+# Reset UERANSIM: kill UEs, restart gNB to clear accumulated UE context
+reset_ueransim() {
+    kill_all_ues
+    docker restart ueransim >/dev/null 2>&1
+    sleep 10
 }

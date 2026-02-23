@@ -46,12 +46,12 @@ NEW_TAC=$((ORIG_TAC + 1))
 NEW_TAC_HEX=$(printf "%06x" "$NEW_TAC")
 info "Updating TAC from ${ORIG_TAC} to ${NEW_TAC}..."
 
-# Update AMF config inside container
-docker exec free5gc-cp sh -c "sed -i 's/tac: ${ORIG_TAC_HEX}/tac: ${NEW_TAC_HEX}/' /free5gc/config/amfcfg.yaml"
+# Update AMF config inside container (use temp file to avoid "Device or resource busy" on bind mounts)
+docker exec free5gc-cp sh -c "sed 's/tac: ${ORIG_TAC_HEX}/tac: ${NEW_TAC_HEX}/' /free5gc/config/amfcfg.yaml > /tmp/amfcfg.yaml && cat /tmp/amfcfg.yaml > /free5gc/config/amfcfg.yaml && rm /tmp/amfcfg.yaml"
 info "Updated AMF TAC to ${NEW_TAC_HEX}"
 
-# Update gNB config
-docker exec ueransim sh -c "sed -i 's/^tac: [0-9]*/tac: ${NEW_TAC}/' /ueransim/config/gnbcfg.yaml"
+# Update gNB config (use temp file to avoid "Device or resource busy" on bind mounts)
+docker exec ueransim sh -c "sed 's/^tac: [0-9]*/tac: ${NEW_TAC}/' /ueransim/config/gnbcfg.yaml > /tmp/gnbcfg.yaml && cat /tmp/gnbcfg.yaml > /ueransim/config/gnbcfg.yaml && rm /tmp/gnbcfg.yaml"
 info "Updated gNB TAC to ${NEW_TAC}"
 
 # Update UE config (not strictly needed, but for consistency)
@@ -107,8 +107,8 @@ kill_all_ues
 
 # Step 6: Restore original TAC
 info "Restoring original TAC (${ORIG_TAC})..."
-docker exec free5gc-cp sh -c "sed -i 's/tac: ${NEW_TAC_HEX}/tac: ${ORIG_TAC_HEX}/' /free5gc/config/amfcfg.yaml"
-docker exec ueransim sh -c "sed -i 's/^tac: ${NEW_TAC}/tac: ${ORIG_TAC}/' /ueransim/config/gnbcfg.yaml"
+docker exec free5gc-cp sh -c "sed 's/tac: ${NEW_TAC_HEX}/tac: ${ORIG_TAC_HEX}/' /free5gc/config/amfcfg.yaml > /tmp/amfcfg.yaml && cat /tmp/amfcfg.yaml > /free5gc/config/amfcfg.yaml && rm /tmp/amfcfg.yaml"
+docker exec ueransim sh -c "sed 's/^tac: ${NEW_TAC}/tac: ${ORIG_TAC}/' /ueransim/config/gnbcfg.yaml > /tmp/gnbcfg.yaml && cat /tmp/gnbcfg.yaml > /ueransim/config/gnbcfg.yaml && rm /tmp/gnbcfg.yaml"
 docker restart free5gc-cp >/dev/null 2>&1
 sleep 30
 docker restart ueransim >/dev/null 2>&1
