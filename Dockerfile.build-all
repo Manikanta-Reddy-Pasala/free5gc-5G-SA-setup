@@ -43,11 +43,9 @@ RUN git clone --recursive -b v4.2.0 --depth 1 https://github.com/free5gc/free5gc
 
 WORKDIR /src/free5gc
 
-# Replace UDM with forked version (SQN resync fix)
-RUN rm -rf NFs/udm && git clone -b main --depth 1 https://github.com/Manikanta-Reddy-Pasala/udm.git NFs/udm
-
-# Replace AMF with forked version (gRPC health check)
-RUN rm -rf NFs/amf && git clone -b main --depth 1 https://github.com/Manikanta-Reddy-Pasala/amf.git NFs/amf
+# Replace UDM and AMF with forked versions (from git submodules in NFs/)
+COPY NFs/udm NFs/udm
+COPY NFs/amf NFs/amf
 
 # Generate gRPC code for AMF proto and add grpc dependency
 RUN cd NFs/amf && \

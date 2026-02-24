@@ -1,0 +1,8 @@
+[submodule "NFs/amf"]
+	path = NFs/amf
+	url = https://github.com/Manikanta-Reddy-Pasala/amf.git
+	branch = main
+[submodule "NFs/udm"]
+	path = NFs/udm
+	url = https://github.com/Manikanta-Reddy-Pasala/udm.git
+	branch = main
