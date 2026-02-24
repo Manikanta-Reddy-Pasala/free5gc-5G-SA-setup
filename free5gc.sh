@@ -433,12 +433,12 @@ db['policyData.ues.smData'].updateOne(
 }
 
 # Increment a hex string by an offset (preserves leading zeros and length)
+# Uses python3 to handle 128-bit hex values (bash overflows at 64-bit)
 hex_add() {
     local hex_str="$1"
     local offset="$2"
     local len=${#hex_str}
-    # Convert hex to decimal, add offset, convert back, zero-pad to original length
-    printf "%0${len}x" $(( 16#${hex_str} + offset ))
+    python3 -c "print(format(int('${hex_str}',16)+${offset},'0${len}x'))"
 }
 
 cmd_provision() {
