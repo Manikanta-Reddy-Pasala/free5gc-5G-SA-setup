@@ -51,13 +51,13 @@ cd free5gc-5G-SA-setup
 # Mac: brew install grpcurl | Linux: go install github.com/fullstorydev/grpcurl/cmd/grpcurl@latest
 
 # Check AMF health (from anywhere — replace with your server IP)
-grpcurl -plaintext <server-ip>:50051 fivegc.FiveGCService.HealthCheck
+grpcurl -plaintext <server-ip>:50051 free5gc.amf.AmfService.HealthCheck
 
 # List all available RPCs
 grpcurl -plaintext <server-ip>:50051 list
 
 # From the server itself
-grpcurl -plaintext localhost:50051 fivegc.FiveGCService.HealthCheck
+grpcurl -plaintext localhost:50051 free5gc.amf.AmfService.HealthCheck
 ```
 
 Returns `HEALTHY` when AMF is running, with the number of connected RANs. Proto definition is in `proto/fivegc.proto` for building custom clients.
