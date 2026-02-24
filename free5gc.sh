@@ -8,7 +8,8 @@
 # Usage:
 #   ./free5gc.sh build                # Compile all NFs from source (~15 min)
 #   ./free5gc.sh build --quick        # Rebuild runtime images only
-#   ./free5gc.sh start                # Start containers + provision subscriber
+#   ./free5gc.sh start                # Start core (without UERANSIM)
+#   ./free5gc.sh start --ueransim     # Start core + UERANSIM simulator
 #   ./free5gc.sh start --debug        # Start with debug-level logging
 #   ./free5gc.sh start --mcc 404 --mnc 30 --tac 1   # Start with custom PLMN
 #   ./free5gc.sh capture start [name] # Start pcap capture (bridge + SBI)
@@ -343,6 +344,10 @@ provision_one() {
     local p_opc="$3"
     local p_token="$4"
 
+    # Derive unique MSISDN from IMSI to avoid duplicate GPSI errors
+    local p_msisdn
+    p_msisdn="msisdn-$(echo "$p_imsi" | sed 's/imsi-//')"
+
     local http_code
     http_code=$(curl -s -o /dev/null -w "%{http_code}" \
         -X POST "http://localhost:${WEBUI_PORT}/api/subscriber/${p_imsi}/${PLMN}" \
@@ -360,7 +365,7 @@ provision_one() {
     \"opc\": {\"opcValue\": \"${p_opc}\", \"encryptionKey\": 0, \"encryptionAlgorithm\": 0}
   },
   \"AccessAndMobilitySubscriptionData\": {
-    \"gpsis\": [\"msisdn-0900000000\"],
+    \"gpsis\": [\"${p_msisdn}\"],
     \"subscribedUeAmbr\": {\"downlink\": \"2 Gbps\", \"uplink\": \"1 Gbps\"},
     \"nssai\": {
       \"defaultSingleNssais\": [{\"sst\": ${SST}, \"sd\": \"${SD}\"}],
@@ -568,11 +573,13 @@ update_configs() {
 
 cmd_start() {
     local debug=false
+    local with_ueransim=false
 
     # Parse start sub-arguments
     while [[ $# -gt 0 ]]; do
         case "$1" in
             --debug) debug=true; shift ;;
+            --ueransim) with_ueransim=true; shift ;;
             --mcc)   MCC="$2"; shift 2 ;;
             --mnc)   MNC="$2"; shift 2 ;;
             --tac)   TAC="$2"; shift 2 ;;
@@ -614,9 +621,14 @@ cmd_start() {
 
     log "PLMN: ${MCC}/${MNC}  TAC: ${TAC}  IMSI: ${IMSI}"
 
-    # Start all containers (CP + UPF + UERANSIM)
+    # Start containers (core services; UERANSIM only with --ueransim)
     log "Step 1/5: Starting containers..."
-    docker compose -f "$COMPOSE_FILE" up -d
+    if [ "$with_ueransim" = true ]; then
+        log "  Including UERANSIM (--ueransim flag)"
+        docker compose -f "$COMPOSE_FILE" --profile ueransim up -d
+    else
+        docker compose -f "$COMPOSE_FILE" up -d
+    fi
 
     # Wait for CP health
     log "Step 2/5: Waiting for Control Plane to be healthy..."
@@ -633,10 +645,12 @@ cmd_start() {
     log "Step 3/5: Provisioning default subscriber..."
     cmd_provision || log "WARNING: Subscriber provisioning failed. May need manual setup."
 
-    # Restart UERANSIM to ensure gNB connects after AMF NGAP is ready
-    log "Restarting UERANSIM to ensure gNB-AMF connection..."
-    docker restart ueransim >/dev/null 2>&1
-    sleep 5
+    # Restart UERANSIM to ensure gNB connects after AMF NGAP is ready (only if started)
+    if [ "$with_ueransim" = true ]; then
+        log "Restarting UERANSIM to ensure gNB-AMF connection..."
+        docker restart ueransim >/dev/null 2>&1
+        sleep 5
+    fi
 
     # Setup data plane routing (host -> UPF -> internet for real UE traffic)
     log "Step 4/5: Setting up data plane routing..."
@@ -645,7 +659,11 @@ cmd_start() {
     # Show status
     log "Step 5/5: Deployment status"
     echo ""
-    docker compose -f "$COMPOSE_FILE" ps
+    if [ "$with_ueransim" = true ]; then
+        docker compose -f "$COMPOSE_FILE" --profile ueransim ps
+    else
+        docker compose -f "$COMPOSE_FILE" ps
+    fi
     echo ""
     log "========================================="
     log "  free5GC IS RUNNING"
@@ -653,6 +671,10 @@ cmd_start() {
     echo ""
     log "WebUI:  http://$(hostname -I | awk '{print $1}'):4000"
     log "        Login: admin / free5gc"
+    if [ "$with_ueransim" = false ]; then
+        log ""
+        log "UERANSIM not started. To include it: ./free5gc.sh start --ueransim"
+    fi
     log "Logs:   ./free5gc.sh logs"
     log "Stop:   ./free5gc.sh stop"
     log "Remove: ./free5gc.sh remove"
@@ -773,13 +795,13 @@ cmd_stop() {
     log "Cleaning up SCTP forwarding rules..."
     cleanup_sctp_forward
     log "Stopping all containers..."
-    docker compose -f "$COMPOSE_FILE" stop
+    docker compose -f "$COMPOSE_FILE" --profile ueransim stop
     log "All containers stopped."
 }
 
 cmd_remove() {
     log "Removing all containers and volumes..."
-    docker compose -f "$COMPOSE_FILE" down -v
+    docker compose -f "$COMPOSE_FILE" --profile ueransim down -v
     log "All containers and volumes removed."
 }
 
@@ -794,7 +816,11 @@ cmd_status() {
 
     # ── 1. Containers ──────────────────────────────────────
     echo -e "${CYAN}── Containers ──────────────────────────────────────────${NC}"
-    local containers=("mongodb" "free5gc-cp" "upf" "webui" "ueransim")
+    local containers=("mongodb" "free5gc-cp" "upf" "webui")
+    # Only check ueransim if its container exists
+    if docker inspect ueransim >/dev/null 2>&1; then
+        containers+=("ueransim")
+    fi
     for c in "${containers[@]}"; do
         local state
         state=$(docker inspect --format='{{.State.Status}}' "$c" 2>/dev/null || echo "missing")
@@ -1009,7 +1035,8 @@ show_usage() {
     echo "Commands:"
     echo "  build [--quick]       Build all NFs from source (~15 min)"
     echo "                        --quick: rebuild runtime images only"
-    echo "  start [options]       Start all containers"
+    echo "  start [options]       Start core network (MongoDB, CP, UPF, WebUI)"
+    echo "                        --ueransim: also start UERANSIM gNB simulator"
     echo "                        --mcc VALUE: Mobile Country Code (3 digits, default: 001)"
     echo "                        --mnc VALUE: Mobile Network Code (2-3 digits, default: 01)"
     echo "                        --tac VALUE: Tracking Area Code (decimal, default: 1)"
@@ -1033,7 +1060,8 @@ show_usage() {
     echo "Examples:"
     echo "  ./free5gc.sh build"
     echo "  ./free5gc.sh start"
-    echo "  ./free5gc.sh start --mcc 404 --mnc 30 --tac 1"
+    echo "  ./free5gc.sh start --ueransim"
+    echo "  ./free5gc.sh start --ueransim --mcc 404 --mnc 30 --tac 1"
     echo "  ./free5gc.sh start --debug"
     echo "  ./free5gc.sh capture start my-test"
     echo "  ./free5gc.sh capture stop"

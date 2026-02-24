@@ -121,6 +121,7 @@ services:
         condition: service_healthy
 
   # ── UERANSIM: gNB + UE Simulator (for testing) ────────────
+  # Not started by default. Use: ./free5gc.sh start --ueransim
   ueransim:
     container_name: ueransim
     image: free5gc-ueransim-local:latest
@@ -142,6 +143,8 @@ services:
     depends_on:
       free5gc-cp:
         condition: service_healthy
+    profiles:
+      - ueransim
 
 networks:
   privnet:

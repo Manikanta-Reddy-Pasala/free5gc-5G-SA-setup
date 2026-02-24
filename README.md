@@ -19,7 +19,7 @@ Your Phone (UE)          5G Base Station (gNB)        5G Core Network
                                                          └─────────┘
 ```
 
-**5 containers** running a complete 5G SA network: MongoDB, Control Plane (8 NFs consolidated), UPF, WebUI, and UERANSIM.
+**4 core containers** (MongoDB, Control Plane, UPF, WebUI) + optional **UERANSIM** simulator for testing.
 
 ## Quick Start
 
@@ -29,8 +29,9 @@ Only needs Docker - no Go, GCC, or CMake on host. Works on Mac (Apple Silicon/In
 git clone https://github.com/Manikanta-Reddy-Pasala/free5gc-5G-SA-setup.git
 cd free5gc-5G-SA-setup
 ./free5gc.sh build            # Compile all NFs from source (~15 min first time)
-./free5gc.sh start            # Start with defaults (MCC=001, MNC=01, TAC=1)
-./free5gc.sh start --mcc 404 --mnc 30 --tac 1   # Start with custom PLMN
+./free5gc.sh start            # Start core only (MongoDB, CP, UPF, WebUI)
+./free5gc.sh start --ueransim # Start core + UERANSIM simulator
+./free5gc.sh start --ueransim --mcc 404 --mnc 30 --tac 1  # With custom PLMN
 ./free5gc.sh provision        # Provision default subscriber in MongoDB
 ./free5gc.sh bulk-provision --count 10  # Provision 10 subscribers (SUPI+KEY auto-increment)
 ./free5gc.sh ue start         # Launch UE, establish PDU session, setup data plane
@@ -48,15 +49,17 @@ cd free5gc-5G-SA-setup
 ```bash
 ./free5gc.sh build                # Compile all NFs from source (~15 min)
 ./free5gc.sh build --quick        # Rebuild runtime images only (skip source compile)
-./free5gc.sh start                # Start with defaults (MCC=001, MNC=01, TAC=1)
-./free5gc.sh start --mcc 404 --mnc 30 --tac 1   # Start with custom PLMN/TAC
+./free5gc.sh start                # Start core only (MongoDB, CP, UPF, WebUI)
+./free5gc.sh start --ueransim     # Start core + UERANSIM gNB simulator
+./free5gc.sh start --ueransim --mcc 404 --mnc 30 --tac 1  # With custom PLMN/TAC
 ./free5gc.sh start --debug        # Start with debug-level logging
+./free5gc.sh start --ueransim --debug  # UERANSIM + debug logging
 ./free5gc.sh provision            # Provision default subscriber in MongoDB
 ./free5gc.sh bulk-provision --count 10                    # Provision 10 subscribers
 ./free5gc.sh bulk-provision --supi 001010123456789 \
     --key 00112233445566778899aabbccddeeff \
     --opc 000102030405060708090a0b0c0d0e0f --count 5     # Custom SUPI/KEY/OPC
-./free5gc.sh ue start             # Launch UE + setup data plane
+./free5gc.sh ue start             # Launch UE + setup data plane (requires --ueransim)
 ./free5gc.sh ue stop              # Stop UE + cleanup routes
 ./free5gc.sh ue status            # Check UE connectivity
 ./free5gc.sh capture start [name] # Start pcap capture (bridge + SBI)
@@ -72,13 +75,14 @@ cd free5gc-5G-SA-setup
 Pass `--mcc`, `--mnc`, `--tac` to configure the network identity at startup. The script updates all config files (AMF, SMF, NRF, NSSF, gNB, UE) automatically:
 
 ```bash
-./free5gc.sh start --mcc 404 --mnc 30 --tac 1        # Indian operator example
-./free5gc.sh start --mcc 310 --mnc 560 --tac 50       # US operator example
-./free5gc.sh start --mcc 001 --mnc 01 --tac 1 --debug # Custom PLMN + debug logging
+./free5gc.sh start --mcc 404 --mnc 30 --tac 1                # Indian operator (core only)
+./free5gc.sh start --ueransim --mcc 310 --mnc 560 --tac 50   # US operator + simulator
+./free5gc.sh start --ueransim --debug                         # Simulator + debug logging
 ```
 
 | Option | Description | Default |
 |--------|-------------|---------|
+| `--ueransim` | Include UERANSIM gNB/UE simulator | not started |
 | `--mcc` | Mobile Country Code (3 digits) | 001 |
 | `--mnc` | Mobile Network Code (2-3 digits) | 01 |
 | `--tac` | Tracking Area Code (decimal) | 1 |
@@ -179,14 +183,15 @@ Available NF log targets: `amf`, `ausf`, `udm`, `udr`, `smf`, `nrf`, `nssf`, `pc
 ## Container Architecture
 
 ```
-DEPLOYMENT: 5 containers
+DEPLOYMENT: 4 core containers + 1 optional
 ┌──────────────────────────────────────────────┐
 │  mongodb                                     │  Database
 │  free5gc-cp (NRF+AMF+AUSF+UDM+UDR+          │  All 8 CP NFs in 1 container
 │              SMF+NSSF+PCF)                   │
 │  upf                                         │  User plane (needs GTP5G)
 │  webui                                       │  Browser-based management (port 4000)
-│  ueransim                                    │  gNB + UE simulator
+├──────────────────────────────────────────────┤
+│  ueransim (optional, --ueransim flag)        │  gNB + UE simulator
 └──────────────────────────────────────────────┘
 ```
 
@@ -198,7 +203,7 @@ DEPLOYMENT: 5 containers
 | `upf` | User Plane Function | Routes all user data |
 | `webui` | Web Console | Subscriber management UI |
 | `mongodb` | Database | Subscriber and config storage |
-| `ueransim` | gNB + UE Simulator | Simulates base station and phone |
+| `ueransim` | gNB + UE Simulator | Simulates base station and phone (optional, `--ueransim`) |
 
 ### SBI Ports (inside free5gc-cp)
 
