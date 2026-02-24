@@ -90,11 +90,12 @@ Pass `--mcc`, `--mnc`, `--tac` to configure the network identity at startup. The
 
 ### Bulk Provisioning
 
-Provision multiple subscribers at once. SUPI and KEY auto-increment by +1 for each UE, OPC stays the same for all:
+Provision multiple subscribers at once. SUPI auto-increments by +1 for each UE. KEY can auto-increment or stay the same (`--same-key`):
 
 ```bash
-./free5gc.sh bulk-provision --count 10    # 10 UEs with default SUPI/KEY/OPC
-./free5gc.sh bulk-provision --supi 001010123456789 --key 00112233445566778899aabbccddeeff --opc 000102030405060708090a0b0c0d0e0f --count 5
+./free5gc.sh bulk-provision --count 10    # 10 UEs, SUPI+KEY auto-increment
+./free5gc.sh bulk-provision --count 64 --same-key   # 64 UEs, same KEY for all
+./free5gc.sh bulk-provision --supi 001010000050641 --key 0C57E15A2CB86087097A6B50D42531DE --opc 109EE52735AE6D3849112CF4175029C7 --count 64 --same-key
 ```
 
 | Option | Description | Default |
@@ -103,6 +104,7 @@ Provision multiple subscribers at once. SUPI and KEY auto-increment by +1 for ea
 | `--key` | Starting K (32 hex chars) | 00112233445566778899aabbccddeeff |
 | `--opc` | OPC, same for all UEs (32 hex chars) | 000102030405060708090a0b0c0d0e0f |
 | `--count` | Number of UEs to provision | 1 |
+| `--same-key` | Use same K for all UEs (don't increment) | off (key increments) |
 
 Example with `--count 3` starting from SUPI `001010123456789`:
 | UE | SUPI | KEY |

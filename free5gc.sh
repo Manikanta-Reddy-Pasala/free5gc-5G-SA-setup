@@ -460,14 +460,16 @@ cmd_bulk_provision() {
     local start_key="00112233445566778899aabbccddeeff"
     local opc="000102030405060708090a0b0c0d0e0f"
     local count=1
+    local same_key=false
 
     # Parse arguments
     while [[ $# -gt 0 ]]; do
         case "$1" in
-            --supi)  start_supi="$2"; shift 2 ;;
-            --key)   start_key="$2"; shift 2 ;;
-            --opc)   opc="$2"; shift 2 ;;
-            --count) count="$2"; shift 2 ;;
+            --supi)     start_supi="$2"; shift 2 ;;
+            --key)      start_key="$2"; shift 2 ;;
+            --opc)      opc="$2"; shift 2 ;;
+            --count)    count="$2"; shift 2 ;;
+            --same-key) same_key=true; shift ;;
             *) log "Unknown option: $1"; return 1 ;;
         esac
     done
@@ -483,7 +485,12 @@ cmd_bulk_provision() {
 
     log "Bulk provisioning ${count} subscriber(s)..."
     log "  Starting SUPI: ${start_supi}"
-    log "  Starting KEY:  ${start_key}"
+    log "  KEY:           ${start_key}"
+    if [ "$same_key" = true ]; then
+        log "  KEY mode:      same for all (--same-key)"
+    else
+        log "  KEY mode:      auto-increment (+1 per UE)"
+    fi
     log "  OPC (shared):  ${opc}"
     echo ""
 
@@ -503,7 +510,11 @@ cmd_bulk_provision() {
         cur_supi_num=$(python3 -c "print(format(int('${start_supi}')+${i},'0${#start_supi}d'))")
         local cur_imsi="imsi-${cur_supi_num}"
         local cur_key
-        cur_key=$(hex_add "$start_key" "$i")
+        if [ "$same_key" = true ]; then
+            cur_key="$start_key"
+        else
+            cur_key=$(hex_add "$start_key" "$i")
+        fi
 
         log "[$(( i + 1 ))/${count}] Provisioning ${cur_imsi} (key: ${cur_key})..."
         if provision_one "$cur_imsi" "$cur_key" "$opc" "$token"; then
@@ -1049,6 +1060,7 @@ show_usage() {
     echo "                        --key VALUE: starting K (default: 00112233445566778899aabbccddeeff)"
     echo "                        --opc VALUE: OPC, same for all (default: 000102030405060708090a0b0c0d0e0f)"
     echo "                        --count N: number of UEs to provision (default: 1)"
+    echo "                        --same-key: use same K for all UEs (no increment)"
     echo "  ue start              Launch UE, establish PDU session, setup data plane"
     echo "  ue stop               Stop UE and cleanup data plane routes"
     echo "  ue status             Check UE connection and test ping"
