@@ -44,31 +44,23 @@ cd free5gc-5G-SA-setup
 - **URL**: `http://<server-ip>:4000`
 - **Login**: `admin` / `free5gc`
 
-**gRPC Health Check** (AMF exposes a gRPC endpoint for external health monitoring):
-- **Port**: `50051` (exposed on host)
-- **Service**: `fivegc.FiveGCService/HealthCheck`
+**AMF Health Check** (gRPC endpoint on port `50051`, accessible from any machine):
 
 ```bash
-# Using grpcurl
-grpcurl -plaintext <server-ip>:50051 fivegc.FiveGCService/HealthCheck
+# Install grpcurl (one-time)
+# Mac: brew install grpcurl | Linux: go install github.com/fullstorydev/grpcurl/cmd/grpcurl@latest
 
-# Using Python
-pip install grpcio grpcio-tools
-python3 -c "
-import grpc, sys, tempfile, os
-from grpc_tools import protoc as protoc_tool
-proto_path = 'proto'
-out = tempfile.mkdtemp()
-protoc_tool.main(['', f'--proto_path={proto_path}', f'--python_out={out}', f'--grpc_python_out={out}', 'fivegc.proto'])
-sys.path.insert(0, out)
-import fivegc_pb2, fivegc_pb2_grpc
-stub = fivegc_pb2_grpc.FiveGCServiceStub(grpc.insecure_channel('localhost:50051'))
-resp = stub.HealthCheck(fivegc_pb2.HealthCheckRequest())
-print(f'Status: {fivegc_pb2.HealthCheckStatus.Status.Name(resp.health_status)}')
-"
+# Check AMF health (from anywhere — replace with your server IP)
+grpcurl -plaintext <server-ip>:50051 fivegc.FiveGCService.HealthCheck
+
+# List all available RPCs
+grpcurl -plaintext <server-ip>:50051 list
+
+# From the server itself
+grpcurl -plaintext localhost:50051 fivegc.FiveGCService.HealthCheck
 ```
 
-The health check returns `HEALTHY` when AMF is running, along with the number of connected RANs. A `Stop` RPC is also available for graceful shutdown.
+Returns `HEALTHY` when AMF is running, with the number of connected RANs. Proto definition is in `proto/fivegc.proto` for building custom clients.
 
 ### All Commands
 
