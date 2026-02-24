@@ -119,6 +119,11 @@ configuration:
     maxInitTimeout: 2 # the maximum init timeout of each sctp connection
   defaultUECtxReq: false # the default value of UE Context Request to decide when triggering Initial Context Setup procedure
 
+  grpc:
+    enable: true
+    bindingIPv4: 0.0.0.0
+    port: 50051
+
   # Metrics configuration
   # If using the same bindingIPv4 as the sbi server, make sure that the ports are different
   metrics:

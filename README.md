@@ -44,6 +44,32 @@ cd free5gc-5G-SA-setup
 - **URL**: `http://<server-ip>:4000`
 - **Login**: `admin` / `free5gc`
 
+**gRPC Health Check** (AMF exposes a gRPC endpoint for external health monitoring):
+- **Port**: `50051` (exposed on host)
+- **Service**: `fivegc.FiveGCService/HealthCheck`
+
+```bash
+# Using grpcurl
+grpcurl -plaintext <server-ip>:50051 fivegc.FiveGCService/HealthCheck
+
+# Using Python
+pip install grpcio grpcio-tools
+python3 -c "
+import grpc, sys, tempfile, os
+from grpc_tools import protoc as protoc_tool
+proto_path = 'proto'
+out = tempfile.mkdtemp()
+protoc_tool.main(['', f'--proto_path={proto_path}', f'--python_out={out}', f'--grpc_python_out={out}', 'fivegc.proto'])
+sys.path.insert(0, out)
+import fivegc_pb2, fivegc_pb2_grpc
+stub = fivegc_pb2_grpc.FiveGCServiceStub(grpc.insecure_channel('localhost:50051'))
+resp = stub.HealthCheck(fivegc_pb2.HealthCheckRequest())
+print(f'Status: {fivegc_pb2.HealthCheckStatus.Status.Name(resp.health_status)}')
+"
+```
+
+The health check returns `HEALTHY` when AMF is running, along with the number of connected RANs. A `Stop` RPC is also available for graceful shutdown.
+
 ### All Commands
 
 ```bash
@@ -218,6 +244,7 @@ DEPLOYMENT: 4 core containers + 1 optional
 | NSSF | 8004 |
 | PCF | 8005 |
 | AMF | 8006 |
+| AMF gRPC | 50051 |
 | SMF | 8007 |
 
 ### Network Configuration
@@ -229,6 +256,7 @@ DEPLOYMENT: 4 core containers + 1 optional
 | NGAP | SCTP 38412 | gNB ↔ AMF control plane |
 | GTP-U | UDP 2152 | gNB ↔ UPF user data |
 | WebUI | TCP 4000 | Admin web interface |
+| AMF gRPC | TCP 50051 | Health check & remote stop |
 
 ### SCTP Forwarding
 

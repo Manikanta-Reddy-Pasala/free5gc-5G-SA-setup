@@ -106,6 +106,10 @@ configuration:
     maxAttempts: 2
     maxInitTimeout: 2
   defaultUECtxReq: false
+  grpc:
+    enable: true
+    bindingIPv4: 0.0.0.0
+    port: 50051
   metrics:
     enable: false
     scheme: http

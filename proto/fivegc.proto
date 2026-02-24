@@ -1,0 +1,35 @@
+syntax = "proto3";
+
+package fivegc;
+
+option go_package = "github.com/free5gc/amf/internal/grpc/proto";
+
+message FiveGC_StopReq {
+}
+
+message HealthCheckRequest {
+}
+
+message HealthCheckStatus {
+  enum Status {
+    STARTING = 0;
+    HEALTHY = 1;
+    UNHEALTHY = 2;
+    RECOVERING = 3;
+  }
+  Status health_status = 1;
+  string error_msg = 2;
+}
+
+message FiveGC_CNM_Message {
+  oneof Message_Type {
+    HealthCheckStatus  health_resp = 1;
+    HealthCheckRequest health_req  = 2;
+    FiveGC_StopReq     stopReq    = 3;
+  }
+}
+
+service FiveGCService {
+  rpc HealthCheck (HealthCheckRequest) returns (HealthCheckStatus);
+  rpc Stop (FiveGC_StopReq) returns (HealthCheckStatus);
+}
