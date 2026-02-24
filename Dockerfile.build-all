@@ -44,6 +44,7 @@ RUN git clone --recursive -b v4.2.0 --depth 1 https://github.com/free5gc/free5gc
 WORKDIR /src/free5gc
 
 # Replace UDM and AMF with forked versions (from git submodules in NFs/)
+RUN rm -rf NFs/udm NFs/amf
 COPY NFs/udm NFs/udm
 COPY NFs/amf NFs/amf
 
@@ -61,12 +62,12 @@ RUN cd NFs/amf && \
 RUN mkdir -p /output/cp && \
     for nf in nrf amf ausf udm udr smf nssf pcf; do \
         echo "=== Building $nf ===" && \
-        (cd NFs/$nf && go build -o /output/cp/$nf -trimpath ./cmd) ; \
+        (cd NFs/$nf && go build -buildvcs=false -o /output/cp/$nf -trimpath ./cmd) ; \
     done
 
 # Build go-upf (user plane function)
 RUN mkdir -p /output/upf && \
-    (cd NFs/upf && go build -o /output/upf/upf -trimpath ./cmd) && \
+    (cd NFs/upf && go build -buildvcs=false -o /output/upf/upf -trimpath ./cmd) && \
     cp -r NFs/upf/internal/forwarder/gtp5g/cmd/gogtp5g-tunnel /tmp/gogtp5g-tunnel-src || true
 
 # Build gtp5g-tunnel utility if available
