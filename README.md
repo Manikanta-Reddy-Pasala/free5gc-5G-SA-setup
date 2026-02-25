@@ -44,23 +44,31 @@ cd free5gc-5G-SA-setup
 - **URL**: `http://<server-ip>:4000`
 - **Login**: `admin` / `free5gc`
 
-**AMF Health Check** (gRPC endpoint on port `50051`, accessible from any machine):
+**AMF Health Check** — raw TCP on port `50051`. Returns a proto-encoded `HealthCheckResponse`. No gRPC/HTTP2 required:
 
 ```bash
-# Install grpcurl (one-time)
-# Mac: brew install grpcurl | Linux: go install github.com/fullstorydev/grpcurl/cmd/grpcurl@latest
+# Quick check — connect and read 3 bytes (020801 = SERVING)
+python3 -c "
+import socket
+s = socket.socket(); s.connect(('<server-ip>', 50051)); s.settimeout(1)
+data = s.recv(64); s.close()
+# decode varint length prefix
+idx, shift, length = 0, 0, 0
+while True:
+    b = data[idx]; idx += 1
+    length |= (b & 0x7F) << shift
+    if b < 0x80: break
+    shift += 7
+pb = data[idx:idx+length]
+print('SERVING' if pb == b'\x08\x01' else 'NOT_SERVING' if pb == b'\x08\x02' else pb.hex())
+"
 
-# Check AMF health (from anywhere — replace with your server IP)
-grpcurl -plaintext <server-ip>:50051 free5gc.amf.AmfService.HealthCheck
-
-# List all available RPCs
-grpcurl -plaintext <server-ip>:50051 list
-
-# From the server itself
-grpcurl -plaintext localhost:50051 free5gc.amf.AmfService.HealthCheck
+# Or just check the raw bytes directly
+python3 -c "import socket; s=socket.socket(); s.connect(('<server-ip>',50051)); s.settimeout(1); print(s.recv(64).hex()); s.close()"
+# 020801  →  02=length(2)  08 01=HealthCheckResponse{status:SERVING}
 ```
 
-Returns `HEALTHY` when AMF is running, with the number of connected RANs. Proto definition is in `proto/fivegc.proto` for building custom clients.
+Wire format: `[varint:length][proto HealthCheckResponse]`. If the client sends nothing within 500ms, the server responds anyway — compatible with simple k8s TCP liveness probes.
 
 ### All Commands
 
@@ -236,7 +244,7 @@ DEPLOYMENT: 4 core containers + 1 optional
 | NSSF | 8004 |
 | PCF | 8005 |
 | AMF | 8006 |
-| AMF gRPC | 50051 |
+| AMF TCP health | 50051 |
 | SMF | 8007 |
 
 ### Network Configuration
@@ -248,7 +256,7 @@ DEPLOYMENT: 4 core containers + 1 optional
 | NGAP | SCTP 38412 | gNB ↔ AMF control plane |
 | GTP-U | UDP 2152 | gNB ↔ UPF user data |
 | WebUI | TCP 4000 | Admin web interface |
-| AMF gRPC | TCP 50051 | Health check & remote stop |
+| AMF TCP health | TCP 50051 | Proto health check (SERVING/NOT_SERVING) |
 
 ### SCTP Forwarding
 
