@@ -110,6 +110,14 @@ configuration:
     enable: true
     bindingIPv4: 0.0.0.0
     port: 50051
+
+  # Node registration — AMF dials this server on startup and sends a RegisterRequest
+  # proto message identifying itself as NodeType_AMF with its own IP and TCP port.
+  registration:
+    enable: false          # set to true to activate outbound registration
+    serverIp: 127.0.0.1   # registration server IP
+    serverPort: 9090       # registration server TCP port
+
   metrics:
     enable: false
     scheme: http

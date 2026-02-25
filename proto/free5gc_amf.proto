@@ -4,7 +4,11 @@ package free5gc.amf;
 
 option go_package = "github.com/free5gc/amf/internal/grpc/proto";
 
+// ─── Health Check ─────────────────────────────────────────────────────────────
+
 // HealthCheckRequest is sent by the client to query AMF health.
+// The service field is informational; the server always responds
+// with the current serving status regardless of its value.
 message HealthCheckRequest {
   string service = 1;
 }
@@ -17,18 +21,44 @@ enum ServingStatus {
 }
 
 // HealthCheckResponse is returned by the TCP health endpoint.
-// Wire bytes for SERVING: 0x08 0x01
+// Wire format (no gRPC): [varint:length][proto-encoded HealthCheckResponse]
+// Wire bytes for SERVING: 0x02 0x08 0x01
+// If client sends nothing within 500ms the server responds anyway.
 message HealthCheckResponse {
   ServingStatus status = 1;
 }
 
-message StopRequest {
+// ─── Node Registration ────────────────────────────────────────────────────────
+
+// NodeType identifies the type of network node registering.
+enum NodeType {
+  INVALID = 0;
+  HWA     = 1;
+  MME     = 2;
+  SGW     = 3;
+  PGW     = 4;
+  MSC     = 5;
+  SGSN    = 6;
+  GGSN_C  = 7;
+  GGSN_U  = 8;
+  HNBGW   = 9;
+  HLR     = 10;
+  NMUSER  = 11;
+  GSM_CNE = 12;
+  AMF     = 13;
 }
 
-message StopResponse {
-  string message = 1;
+// RegisterRequest is sent by the AMF on startup to announce itself.
+// ip and port are the AMF's own advertised TCP health-check address.
+// Wire format: [varint:length][proto-encoded RegisterRequest]
+message RegisterRequest {
+  NodeType node_type = 1;
+  string   ip        = 2;
+  uint32   port      = 3;
 }
 
-// No gRPC service definition — the TCP health endpoint uses raw TCP.
-// Wire format: [varint:length][HealthCheckRequest] → [varint:length][HealthCheckResponse]
-// If client sends nothing within 500ms the server responds anyway.
+// RegisterResponse is the optional acknowledgement from the registration server.
+message RegisterResponse {
+  bool   success = 1;
+  string message = 2;
+}
