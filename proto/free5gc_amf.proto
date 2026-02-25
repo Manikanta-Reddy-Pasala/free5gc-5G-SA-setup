@@ -29,10 +29,6 @@ message StopResponse {
   string message = 1;
 }
 
-// AmfService — for reference only.
-// The TCP health endpoint does not use gRPC; it accepts a raw
-// varint-length-prefixed HealthCheckRequest and responds with a
-// varint-length-prefixed HealthCheckResponse over plain TCP.
-service AmfService {
-  rpc Stop (StopRequest) returns (StopResponse);
-}
+// No gRPC service definition — the TCP health endpoint uses raw TCP.
+// Wire format: [varint:length][HealthCheckRequest] → [varint:length][HealthCheckResponse]
+// If client sends nothing within 500ms the server responds anyway.
